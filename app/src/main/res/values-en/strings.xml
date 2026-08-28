@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PICO Wallpaper Studio</string>
+    <string name="studio_title">PICO Wallpaper Studio</string>
+    <string name="studio_subtitle">Library and Settings backgrounds</string>
+    <string name="language_button">Language</string>
+    <string name="target_library">Library</string>
+    <string name="target_library_detail">AppManager content</string>
+    <string name="target_settings">PICO Settings</string>
+    <string name="target_settings_detail">Settings page content</string>
+    <string name="preview_heading">Background preview</string>
+    <string name="preview_help">Drag to reposition. Pinch to zoom.</string>
+    <string name="content_area_ratio">825 x 750 content area</string>
+    <string name="actions_heading">Background actions</string>
+    <string name="actions_detail">Changes stay staged until you choose a range.</string>
+    <string name="action_choose_image">Choose image</string>
+    <string name="action_restore">Restore default</string>
+    <string name="action_apply">Apply</string>
+    <string name="language_title">Choose language</string>
+    <string name="language_chinese">简体中文</string>
+    <string name="language_english">English</string>
+    <string name="language_russian">Русский</string>
+    <string name="status_open_failed">Unable to open image.</string>
+    <string name="status_ready">Image ready. Drag to position and pinch to scale.</string>
+    <string name="status_choose_first">Choose an image before applying it.</string>
+    <string name="status_saving">Saving wallpaper…</string>
+    <string name="status_save_failed">Unable to save wallpaper.</string>
+    <string name="status_applied">Wallpaper applied. Target application restarted.</string>
+    <string name="status_restored">PICO default background restored.</string>
+    <string name="status_restore_failed">Unable to restore default background.</string>
+    <string name="status_default_active">PICO default backgrounds are active.</string>
+    <string name="status_custom_active">Custom wallpaper is active.</string>
+    <string name="dialog_apply_title">Apply wallpaper to</string>
+    <string name="dialog_apply_library">Library</string>
+    <string name="dialog_apply_settings">PICO Settings</string>
+    <string name="dialog_apply_both">Library and PICO Settings</string>
+    <string name="dialog_restore_title">Restore PICO default</string>
+    <string name="dialog_restore_library">Restore Library</string>
+    <string name="dialog_restore_settings">Restore PICO Settings</string>
+    <string name="dialog_restore_both">Restore both</string>
+</resources>

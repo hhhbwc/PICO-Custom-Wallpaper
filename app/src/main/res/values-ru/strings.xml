@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Студия обоев PICO</string>
+    <string name="studio_title">Студия обоев PICO</string>
+    <string name="studio_subtitle">Фоны библиотеки и настроек</string>
+    <string name="language_button">Язык</string>
+    <string name="target_library">Библиотека</string>
+    <string name="target_library_detail">Содержимое AppManager</string>
+    <string name="target_settings">Настройки PICO</string>
+    <string name="target_settings_detail">Страница настроек</string>
+    <string name="preview_heading">Предпросмотр фона</string>
+    <string name="preview_help">Перетаскивайте для позиции, сведите пальцы для масштаба.</string>
+    <string name="content_area_ratio">Область содержимого 825 x 750</string>
+    <string name="actions_heading">Действия с фоном</string>
+    <string name="actions_detail">Изменения сохраняются до выбора области применения.</string>
+    <string name="action_choose_image">Выбрать изображение</string>
+    <string name="action_restore">Восстановить</string>
+    <string name="action_apply">Применить</string>
+    <string name="language_title">Выберите язык</string>
+    <string name="language_chinese">简体中文</string>
+    <string name="language_english">English</string>
+    <string name="language_russian">Русский</string>
+    <string name="status_open_failed">Не удалось открыть изображение.</string>
+    <string name="status_ready">Изображение готово. Перетащите его и измените масштаб.</string>
+    <string name="status_choose_first">Сначала выберите изображение.</string>
+    <string name="status_saving">Сохранение обоев…</string>
+    <string name="status_save_failed">Не удалось сохранить обои.</string>
+    <string name="status_applied">Обои применены. Целевое приложение перезапущено.</string>
+    <string name="status_restored">Восстановлен стандартный фон PICO.</string>
+    <string name="status_restore_failed">Не удалось восстановить стандартный фон.</string>
+    <string name="status_default_active">Используются стандартные фоны PICO.</string>
+    <string name="status_custom_active">Пользовательские обои включены.</string>
+    <string name="dialog_apply_title">Применить обои к</string>
+    <string name="dialog_apply_library">Библиотеке</string>
+    <string name="dialog_apply_settings">Настройкам PICO</string>
+    <string name="dialog_apply_both">Библиотеке и настройкам PICO</string>
+    <string name="dialog_restore_title">Восстановить фон PICO</string>
+    <string name="dialog_restore_library">Восстановить библиотеку</string>
+    <string name="dialog_restore_settings">Восстановить настройки PICO</string>
+    <string name="dialog_restore_both">Восстановить все</string>
+</resources>

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PICO 壁纸工作室</string>
+    <string name="studio_title">PICO 壁纸工作室</string>
+    <string name="studio_subtitle">资源库与设置背景</string>
+    <string name="language_button">语言</string>
+    <string name="target_library">资源库</string>
+    <string name="target_library_detail">AppManager 内容区</string>
+    <string name="target_settings">PICO 设置</string>
+    <string name="target_settings_detail">设置页面内容区</string>
+    <string name="preview_heading">背景预览</string>
+    <string name="preview_help">拖动调整位置，双指缩放。</string>
+    <string name="content_area_ratio">825 x 750 内容区域</string>
+    <string name="actions_heading">背景操作</string>
+    <string name="actions_detail">修改会暂存，选择应用范围后才生效。</string>
+    <string name="action_choose_image">选择图片</string>
+    <string name="action_restore">恢复默认</string>
+    <string name="action_apply">应用</string>
+    <string name="language_title">选择语言</string>
+    <string name="language_chinese">简体中文</string>
+    <string name="language_english">English</string>
+    <string name="language_russian">Русский</string>
+    <string name="status_open_failed">无法打开图片。</string>
+    <string name="status_ready">图片已就绪。拖动调整位置，双指缩放。</string>
+    <string name="status_choose_first">请先选择图片。</string>
+    <string name="status_saving">正在保存壁纸…</string>
+    <string name="status_save_failed">无法保存壁纸。</string>
+    <string name="status_applied">壁纸已应用，目标应用已重启。</string>
+    <string name="status_restored">已恢复 PICO 默认背景。</string>
+    <string name="status_restore_failed">无法恢复默认背景。</string>
+    <string name="status_default_active">当前使用 PICO 默认背景。</string>
+    <string name="status_custom_active">当前自定义壁纸已启用。</string>
+    <string name="dialog_apply_title">应用壁纸到</string>
+    <string name="dialog_apply_library">资源库</string>
+    <string name="dialog_apply_settings">PICO 设置</string>
+    <string name="dialog_apply_both">资源库和 PICO 设置</string>
+    <string name="dialog_restore_title">恢复 PICO 默认背景</string>
+    <string name="dialog_restore_library">恢复资源库</string>
+    <string name="dialog_restore_settings">恢复 PICO 设置</string>
+    <string name="dialog_restore_both">全部恢复</string>
+</resources>
