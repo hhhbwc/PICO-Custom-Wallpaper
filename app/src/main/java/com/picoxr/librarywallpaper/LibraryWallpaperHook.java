@@ -2,6 +2,7 @@ package com.picoxr.librarywallpaper;
 
 import android.app.Activity;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.BitmapFactory;
 import android.os.Bundle;
 import android.view.View;
@@ -29,11 +30,26 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             "item_wifi", "item_controller", "item_bluetooth", "item_brightness", "item_lab",
             "item_general", "item_developer"
     };
+    private static final String[] SETTINGS_CONTROL_TYPES = {
+            "com.picovr.view.SwitchView",
+            "android.widget.Switch",
+            "androidx.appcompat.widget.SwitchCompat",
+            "com.picovr.customviews.DropdownOptionView",
+            "com.picovr.customviews.ConfigSwitchLayout"
+    };
     private static final Set<ViewGroup> SETTINGS_CONTAINERS =
+            Collections.newSetFromMap(new WeakHashMap<>());
+    private static final Set<Activity> SETTINGS_LAYOUT_LISTENERS =
             Collections.newSetFromMap(new WeakHashMap<>());
     private static final Map<View, WallpaperSurface> SETTINGS_SURFACES =
             Collections.synchronizedMap(new WeakHashMap<>());
     private static final Set<View> APPLYING_SETTINGS_SURFACES =
+            Collections.newSetFromMap(new WeakHashMap<>());
+    private static final Map<Activity, Map<WallpaperTarget, Bitmap>> BITMAP_CACHE =
+            Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<Activity, Map<WallpaperTarget, WallpaperConfig>> CONFIG_CACHE =
+            Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Set<View> TRANSPARENT_SETTINGS_SURFACES =
             Collections.newSetFromMap(new WeakHashMap<>());
 
     @Override
@@ -55,7 +71,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
                 Activity activity = (Activity) param.thisObject;
-                activity.getWindow().getDecorView().post(() -> installAppManager(activity));
+                installAppManager(activity);
+                activity.getWindow().getDecorView().postOnAnimation(() -> installAppManager(activity));
             }
         });
         log("AppManager hook installed in " + lpparam.processName);
@@ -66,24 +83,48 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         XposedHelpers.findAndHookMethod(activity, "onCreate", Bundle.class, new XC_MethodHook() {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
-                retrySettingsInstall((Activity) param.thisObject, 0);
+                Activity activity = (Activity) param.thisObject;
+                retrySettingsInstall(activity, 0);
+                activity.getWindow().getDecorView().postOnAnimation(
+                        () -> retrySettingsInstall(activity, 0));
             }
         });
-        XposedHelpers.findAndHookMethod(View.class, "setBackgroundResource", int.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        View view = (View) param.thisObject;
-                        WallpaperSurface surface = SETTINGS_SURFACES.get(view);
-                        synchronized (APPLYING_SETTINGS_SURFACES) {
-                            if (surface != null && !APPLYING_SETTINGS_SURFACES.contains(view)) {
-                                install(surface.activity, view, WallpaperTarget.SETTINGS,
-                                        surface.contentRoot, true);
-                            }
-                        }
-                    }
-                });
+        XC_MethodHook backgroundHook = new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                View view = (View) param.thisObject;
+                if (isSwitchControl(view)) {
+                    clearSwitchBackground(view);
+                    return;
+                }
+                restoreSettingsSurface(view);
+            }
+        };
+        XposedHelpers.findAndHookMethod(View.class, "setBackgroundResource", int.class, backgroundHook);
+        XposedHelpers.findAndHookMethod(View.class, "setBackgroundColor", int.class, backgroundHook);
+        XposedHelpers.findAndHookMethod(View.class, "setBackground", android.graphics.drawable.Drawable.class,
+                backgroundHook);
         log("Settings hook installed in " + lpparam.processName);
+    }
+
+    private static void restoreSettingsSurface(View view) {
+        WallpaperSurface surface = SETTINGS_SURFACES.get(view);
+        synchronized (APPLYING_SETTINGS_SURFACES) {
+            if (surface == null || APPLYING_SETTINGS_SURFACES.contains(view)) {
+                return;
+            }
+            APPLYING_SETTINGS_SURFACES.add(view);
+            try {
+                if (surface.transparent) {
+                    view.setBackgroundColor(Color.TRANSPARENT);
+                } else {
+                    install(surface.activity, view, WallpaperTarget.SETTINGS,
+                            surface.contentRoot, true);
+                }
+            } finally {
+                APPLYING_SETTINGS_SURFACES.remove(view);
+            }
+        }
     }
 
     private static void retrySettingsInstall(Activity activity, int attempt) {
@@ -97,16 +138,18 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             } else {
                 log("Settings wallpaper target unavailable");
             }
-        }, 150L);
+        }, attempt == 0 ? 0L : 16L);
     }
 
     private static void installSettings(Activity activity, ViewGroup container) {
+        installSettingsLayoutListener(activity, container);
         synchronized (SETTINGS_CONTAINERS) {
             if (SETTINGS_CONTAINERS.add(container)) {
                 container.setOnHierarchyChangeListener(new ViewGroup.OnHierarchyChangeListener() {
                     @Override
                     public void onChildViewAdded(View parent, View child) {
-                        parent.post(() -> applySettingsPage(activity, container));
+                        applySettingsPage(activity, container);
+                        child.postOnAnimation(() -> applySettingsPage(activity, container));
                     }
 
                     @Override
@@ -118,6 +161,16 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         applySettingsPage(activity, container);
     }
 
+    private static void installSettingsLayoutListener(Activity activity, ViewGroup container) {
+        synchronized (SETTINGS_LAYOUT_LISTENERS) {
+            if (!SETTINGS_LAYOUT_LISTENERS.add(activity)) {
+                return;
+            }
+        }
+        activity.getWindow().getDecorView().getViewTreeObserver().addOnGlobalLayoutListener(
+                () -> applySettingsPage(activity, container));
+    }
+
     private static void applySettingsPage(Activity activity, ViewGroup container) {
         ViewGroup contentRoot = parentGroup(container);
         if (contentRoot == null) {
@@ -125,25 +178,127 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         }
         installSettingsNavigation(activity, contentRoot);
         install(activity, container, WallpaperTarget.SETTINGS, contentRoot, true);
+        scanControls(activity, contentRoot, contentRoot);
         int children = container.getChildCount();
         for (int index = 0; index < children; index++) {
             View pageRoot = container.getChildAt(index);
             if (pageRoot != null && pageRoot.getVisibility() == View.VISIBLE) {
                 install(activity, pageRoot, WallpaperTarget.SETTINGS, contentRoot, true);
+                installControlRows(activity, pageRoot, contentRoot);
             }
         }
         log("Settings wallpaper refreshed for " + children + " page roots");
     }
 
+    private static void installControlRows(Activity activity, View pageRoot, ViewGroup contentRoot) {
+        if (!(pageRoot instanceof ViewGroup)) {
+            return;
+        }
+        scanControls(activity, (ViewGroup) pageRoot, contentRoot);
+    }
+
+    private static void scanControls(Activity activity, ViewGroup group, ViewGroup contentRoot) {
+        for (int index = 0; index < group.getChildCount(); index++) {
+            View child = group.getChildAt(index);
+            if (isSettingsControl(child)) {
+                if (isSwitchControl(child)) {
+                    clearSwitchBackground(child);
+                }
+                View row = findControlRow(child, contentRoot);
+                if (row != null) {
+                    if (row.getWidth() > 0 && row.getHeight() > 0) {
+                        install(activity, row, WallpaperTarget.SETTINGS, contentRoot, true);
+                        log("Settings control row applied for " + describe(child) + " -> " + describe(row));
+                    } else {
+                        row.postOnAnimation(() -> applyControlRow(activity, child, row, contentRoot));
+                        log("Settings control row pending: " + describe(child) + " -> " + describe(row));
+                    }
+                } else {
+                    log("Settings control detected: " + describe(child) + " parents=" + describeParents(child, contentRoot));
+                }
+            }
+            if (child instanceof ViewGroup) {
+                scanControls(activity, (ViewGroup) child, contentRoot);
+            }
+        }
+    }
+
+    private static void applyControlRow(Activity activity, View control, View row, ViewGroup contentRoot) {
+        if (row.getWidth() > 0 && row.getHeight() > 0) {
+            install(activity, row, WallpaperTarget.SETTINGS, contentRoot, true);
+            log("Settings control row applied for " + describe(control) + " -> " + describe(row));
+        }
+    }
+
+    private static String describeParents(View view, ViewGroup contentRoot) {
+        StringBuilder result = new StringBuilder();
+        View current = view;
+        while (current != null && current != contentRoot) {
+            if (result.length() > 0) {
+                result.append(" <- ");
+            }
+            result.append(describe(current));
+            ViewParent parent = current.getParent();
+            current = parent instanceof View ? (View) parent : null;
+        }
+        return result.toString();
+    }
+
+    private static boolean isSettingsControl(View view) {
+        String className = view.getClass().getName();
+        for (String type : SETTINGS_CONTROL_TYPES) {
+            if (type.equals(className) || className.endsWith("." + type.substring(type.lastIndexOf('.') + 1))) {
+                return true;
+            }
+        }
+        String resourceName = resourceName(view);
+        return resourceName.endsWith("Toggle") || resourceName.endsWith("Switch")
+                || resourceName.contains("powerModeOption") || resourceName.contains("Option");
+    }
+
+    private static boolean isSwitchControl(View view) {
+        String className = view.getClass().getName();
+        return className.endsWith("SwitchView") || className.endsWith("SwitchCompat")
+                || className.equals("android.widget.Switch") || className.equals("android.widget.SwitchButton");
+    }
+
+    private static void clearSwitchBackground(View view) {
+        synchronized (APPLYING_SETTINGS_SURFACES) {
+            if (APPLYING_SETTINGS_SURFACES.add(view)) {
+                try {
+                    view.setBackground(null);
+                } finally {
+                    APPLYING_SETTINGS_SURFACES.remove(view);
+                }
+            }
+        }
+    }
+
+    private static View findControlRow(View control, ViewGroup contentRoot) {
+        ViewParent parent = control.getParent();
+        if (!(parent instanceof ViewGroup)) {
+            return null;
+        }
+        ViewGroup group = (ViewGroup) parent;
+        if (group == contentRoot
+                || (group.getId() != View.NO_ID
+                && contentRoot.getId() != View.NO_ID
+                && group.getId() == contentRoot.getId())) {
+            return null;
+        }
+        return group;
+    }
+
     private static void installSettingsNavigation(Activity activity, ViewGroup contentRoot) {
-        installSettingsSurface(activity, findById(activity, "main_sideContainer"), contentRoot);
+        View sideContainer = findById(activity, "main_sideContainer");
+        installSettingsSurface(activity, sideContainer, contentRoot, false);
         View tabs = findById(activity, "main_tabs");
-        installSettingsSurface(activity, tabs, contentRoot);
+        installSettingsSurface(activity, tabs, contentRoot, true);
         if (!(tabs instanceof ViewGroup)) {
             return;
         }
         for (String item : SETTINGS_NAVIGATION_ITEMS) {
-            installSettingsSurface(activity, findById(activity, item), contentRoot);
+            installSettingsSurface(activity, findById(activity, item), contentRoot, true);
         }
     }
 
@@ -152,12 +307,24 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         return id == 0 ? null : activity.findViewById(id);
     }
 
-    private static void installSettingsSurface(Activity activity, View view, ViewGroup contentRoot) {
+    private static void installSettingsSurface(Activity activity, View view, ViewGroup contentRoot,
+            boolean transparent) {
         if (view == null) {
             return;
         }
-        SETTINGS_SURFACES.put(view, new WallpaperSurface(activity, contentRoot));
-        install(activity, view, WallpaperTarget.SETTINGS, contentRoot, false);
+        SETTINGS_SURFACES.put(view, new WallpaperSurface(activity, contentRoot, transparent));
+        if (transparent) {
+            synchronized (APPLYING_SETTINGS_SURFACES) {
+                APPLYING_SETTINGS_SURFACES.add(view);
+                try {
+                    view.setBackgroundColor(Color.TRANSPARENT);
+                } finally {
+                    APPLYING_SETTINGS_SURFACES.remove(view);
+                }
+            }
+        } else {
+            install(activity, view, WallpaperTarget.SETTINGS, contentRoot, true);
+        }
     }
 
     private static void installAppManager(Activity activity) {
@@ -185,11 +352,14 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         if (view == null || contentRoot == null || contentRoot.getWidth() == 0 || contentRoot.getHeight() == 0) {
             return;
         }
-        WallpaperConfig config = readConfig(activity, target);
+        WallpaperConfig config = cachedConfig(activity, target);
         if (!config.enabled) {
             return;
         }
-        Bitmap bitmap = loadWallpaper(activity, target);
+        if (settingsSurface) {
+            SETTINGS_SURFACES.put(view, new WallpaperSurface(activity, contentRoot, false));
+        }
+        Bitmap bitmap = cachedWallpaper(activity, target);
         if (bitmap == null) {
             log(target.key + " wallpaper image unavailable");
             return;
@@ -210,7 +380,7 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                     APPLYING_SETTINGS_SURFACES.remove(view);
                 }
             }
-            SETTINGS_SURFACES.put(view, new WallpaperSurface(activity, contentRoot));
+            SETTINGS_SURFACES.put(view, new WallpaperSurface(activity, contentRoot, false));
         } else {
             view.setBackground(new CenterCropDrawable(bitmap, config.transform, contentRoot.getWidth(),
                     contentRoot.getHeight(), viewportX, viewportY));
@@ -218,6 +388,20 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         log(target.key + " wallpaper applied to " + describe(view) + " at "
                 + viewportX + "," + viewportY + " in " + contentRoot.getWidth() + "x"
                 + contentRoot.getHeight());
+    }
+
+    private static WallpaperConfig cachedConfig(Activity activity, WallpaperTarget target) {
+        Map<WallpaperTarget, WallpaperConfig> cache = CONFIG_CACHE.get(activity);
+        if (cache == null) {
+            cache = new java.util.EnumMap<>(WallpaperTarget.class);
+            CONFIG_CACHE.put(activity, cache);
+        }
+        WallpaperConfig config = cache.get(target);
+        if (config == null) {
+            config = readConfig(activity, target);
+            cache.put(target, config);
+        }
+        return config;
     }
 
     private static WallpaperConfig readConfig(Activity activity, WallpaperTarget target) {
@@ -236,6 +420,23 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         }
     }
 
+    private static Bitmap cachedWallpaper(Activity activity, WallpaperTarget target) {
+        Map<WallpaperTarget, Bitmap> cache = BITMAP_CACHE.get(activity);
+        if (cache == null) {
+            cache = new java.util.EnumMap<>(WallpaperTarget.class);
+            BITMAP_CACHE.put(activity, cache);
+        }
+        Bitmap bitmap = cache.get(target);
+        if (bitmap != null && !bitmap.isRecycled()) {
+            return bitmap;
+        }
+        bitmap = loadWallpaper(activity, target);
+        if (bitmap != null) {
+            cache.put(target, bitmap);
+        }
+        return bitmap;
+    }
+
     private static Bitmap loadWallpaper(Activity activity, WallpaperTarget target) {
         try (InputStream stream = activity.getContentResolver().openInputStream(WallpaperProvider.uriFor(target))) {
             return BitmapFactory.decodeStream(stream);
@@ -244,8 +445,19 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         }
     }
 
+    private static String resourceName(View view) {
+        if (view == null || view.getId() == View.NO_ID) {
+            return "no-id";
+        }
+        try {
+            return view.getResources().getResourceEntryName(view.getId());
+        } catch (Throwable ignored) {
+            return "no-id";
+        }
+    }
+
     private static String describe(View view) {
-        String resourceName = "no-id";
+        String resourceName = resourceName(view);
         if (view.getId() != View.NO_ID) {
             try {
                 resourceName = view.getResources().getResourceEntryName(view.getId());
@@ -264,10 +476,12 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     private static final class WallpaperSurface {
         final Activity activity;
         final ViewGroup contentRoot;
+        final boolean transparent;
 
-        WallpaperSurface(Activity activity, ViewGroup contentRoot) {
+        WallpaperSurface(Activity activity, ViewGroup contentRoot, boolean transparent) {
             this.activity = activity;
             this.contentRoot = contentRoot;
+            this.transparent = transparent;
         }
     }
 }
