@@ -10,7 +10,7 @@
     <string name="target_settings_detail">设置页面内容区</string>
     <string name="preview_heading">背景预览</string>
     <string name="preview_help">拖动调整位置，双指缩放。</string>
-    <string name="content_area_ratio">825 x 750 内容区域</string>
+    <string name="content_area_ratio">1125 x 750 完整窗口区域</string>
     <string name="actions_heading">背景操作</string>
     <string name="actions_detail">修改会暂存，选择应用范围后才生效。</string>
     <string name="action_choose_image">选择图片</string>

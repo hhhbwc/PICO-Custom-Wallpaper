@@ -11,7 +11,7 @@
 
 - 分别为资源库和 PICO 设置设置壁纸，也可一次应用到两者。
 - 壁纸会覆盖左侧导航栏和右侧内容区；PICO 设置页面切换后会自动重新应用。
-- 图片编辑器使用真实的 `825 x 750` 内容区比例，支持拖动调整位置与双指缩放。
+- 图片编辑器使用完整的 `1125 x 750` 左右窗口比例，支持拖动调整位置与双指缩放。
 - 裁切框内保持明亮，框外显示同一图片的暗化预览。
 - 每个目标独立保存图片、缩放和位置。
 - 首次使用及恢复默认后保持 PICO 原始背景；可单独恢复资源库、PICO 设置或两者。
@@ -56,7 +56,7 @@ Provides independent static wallpapers and crop previews for the PICO 4 AppManag
 
 - Set wallpapers separately for the Library and PICO Settings, or apply one image to both.
 - Wallpapers cover the left navigation pane and right content pane. PICO Settings reapplies its wallpaper after page navigation.
-- The image editor uses the real `825 x 750` content ratio and supports drag-to-position and pinch-to-zoom.
+- The image editor uses the full `1125 x 750` left-and-right window ratio and supports drag-to-position and pinch-to-zoom.
 - The crop frame stays bright while the same image remains visible as a dimmed preview outside it.
 - Each target saves its own image, scale, and position.
 - Original PICO backgrounds remain active until an image is applied or after restoring defaults. Restore the Library, PICO Settings, or both independently.
@@ -101,7 +101,7 @@ app/build/outputs/apk/debug/app-debug.apk
 
 - Устанавливайте обои отдельно для библиотеки и настроек PICO либо применяйте одно изображение к обоим целям.
 - Обои применяются к левой панели навигации и правой области содержимого. В настройках PICO обои повторно применяются после перехода между страницами.
-- Редактор изображения использует фактическое соотношение области содержимого `825 x 750`, поддерживает перетаскивание и масштабирование жестом двумя пальцами.
+- Редактор изображения использует полное соотношение левой и правой частей окна `1125 x 750`, поддерживает перетаскивание и масштабирование жестом двумя пальцами.
 - Внутри рамки кадрирования изображение остается ярким, а за ее пределами то же изображение видно в затемненном виде.
 - Для каждой цели отдельно сохраняются изображение, масштаб и положение.
 - До применения изображения и после восстановления используются исходные фоны PICO. Можно отдельно восстановить библиотеку, настройки PICO или оба фона.

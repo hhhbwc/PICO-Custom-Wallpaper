@@ -10,7 +10,7 @@
     <string name="target_settings_detail">Страница настроек</string>
     <string name="preview_heading">Предпросмотр фона</string>
     <string name="preview_help">Перетаскивайте для позиции, сведите пальцы для масштаба.</string>
-    <string name="content_area_ratio">Область содержимого 825 x 750</string>
+    <string name="content_area_ratio">Полная область окна 1125 x 750</string>
     <string name="actions_heading">Действия с фоном</string>
     <string name="actions_detail">Изменения сохраняются до выбора области применения.</string>
     <string name="action_choose_image">Выбрать изображение</string>

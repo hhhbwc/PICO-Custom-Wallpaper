@@ -1,8 +1,8 @@
 package com.picoxr.librarywallpaper;
 
 enum WallpaperTarget {
-    LIBRARY("library", 825, 750),
-    SETTINGS("settings", 825, 750);
+    LIBRARY("library", 1125, 750),
+    SETTINGS("settings", 1125, 750);
 
     final String key;
     final int previewWidth;

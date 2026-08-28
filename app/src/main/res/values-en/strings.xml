@@ -10,7 +10,7 @@
     <string name="target_settings_detail">Settings page content</string>
     <string name="preview_heading">Background preview</string>
     <string name="preview_help">Drag to reposition. Pinch to zoom.</string>
-    <string name="content_area_ratio">825 x 750 content area</string>
+    <string name="content_area_ratio">1125 x 750 full window area</string>
     <string name="actions_heading">Background actions</string>
     <string name="actions_detail">Changes stay staged until you choose a range.</string>
     <string name="action_choose_image">Choose image</string>
