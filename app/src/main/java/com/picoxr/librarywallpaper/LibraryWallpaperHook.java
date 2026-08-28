@@ -25,6 +25,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     private static final String TAG = "PicoLibraryWallpaper";
+    private static final boolean DEBUG_LOGGING = false;
     private static final String APP_MANAGER = "com.pvr.appmanager";
     private static final String SETTINGS = "com.picovr.settings";
     private static final String SIDE_NAVIGATION = "com.bytedance.osui.grouplist.OSUISideNavigation";
@@ -45,6 +46,12 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             Collections.newSetFromMap(new WeakHashMap<>());
     private static final Set<Activity> SETTINGS_LAYOUT_LISTENERS =
             Collections.newSetFromMap(new WeakHashMap<>());
+    private static final Set<Activity> SETTINGS_REFRESH_PENDING =
+            Collections.newSetFromMap(new WeakHashMap<>());
+    private static final Map<Activity, Integer> SETTINGS_REFRESH_SIGNATURES =
+            Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Set<View> SETTINGS_PENDING_ROWS =
+            Collections.newSetFromMap(new WeakHashMap<>());
     private static final Map<View, WallpaperSurface> SETTINGS_SURFACES =
             Collections.synchronizedMap(new WeakHashMap<>());
     private static final Set<View> APPLYING_SETTINGS_SURFACES =
@@ -56,6 +63,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     private static final Set<View> TRANSPARENT_SETTINGS_SURFACES =
             Collections.newSetFromMap(new WeakHashMap<>());
     private static final Map<TextView, ColorStateList> ORIGINAL_TEXT_COLORS =
+            Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<TextView, Integer> TEXT_STYLE_SIGNATURE =
             Collections.synchronizedMap(new WeakHashMap<>());
 
     @Override
@@ -95,8 +104,6 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             protected void afterHookedMethod(MethodHookParam param) {
                 Activity activity = (Activity) param.thisObject;
                 retrySettingsInstall(activity, 0);
-                activity.getWindow().getDecorView().postOnAnimation(
-                        () -> retrySettingsInstall(activity, 0));
             }
         });
         XC_MethodHook backgroundHook = new XC_MethodHook() {
@@ -158,8 +165,7 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 container.setOnHierarchyChangeListener(new ViewGroup.OnHierarchyChangeListener() {
                     @Override
                     public void onChildViewAdded(View parent, View child) {
-                        applySettingsPage(activity, container);
-                        child.postOnAnimation(() -> applySettingsPage(activity, container));
+                        requestSettingsRefresh(activity, container);
                     }
 
                     @Override
@@ -178,7 +184,21 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             }
         }
         activity.getWindow().getDecorView().getViewTreeObserver().addOnGlobalLayoutListener(
-                () -> applySettingsPage(activity, container));
+                () -> requestSettingsRefresh(activity, container));
+    }
+
+    private static void requestSettingsRefresh(Activity activity, ViewGroup container) {
+        synchronized (SETTINGS_REFRESH_PENDING) {
+            if (!SETTINGS_REFRESH_PENDING.add(activity)) {
+                return;
+            }
+        }
+        activity.getWindow().getDecorView().postOnAnimation(() -> {
+            synchronized (SETTINGS_REFRESH_PENDING) {
+                SETTINGS_REFRESH_PENDING.remove(activity);
+            }
+            applySettingsPage(activity, container);
+        });
     }
 
     private static void applySettingsPage(Activity activity, ViewGroup container) {
@@ -186,10 +206,14 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         if (contentRoot == null) {
             return;
         }
+        int signature = settingsPageSignature(container, contentRoot);
+        Integer previousSignature = SETTINGS_REFRESH_SIGNATURES.get(activity);
+        if (previousSignature != null && previousSignature == signature) {
+            return;
+        }
+        SETTINGS_REFRESH_SIGNATURES.put(activity, signature);
         installSettingsNavigation(activity, contentRoot);
         install(activity, container, WallpaperTarget.SETTINGS, contentRoot, true);
-        scanControls(activity, contentRoot, contentRoot);
-        scanSettingsRows(activity, contentRoot, contentRoot);
         styleTextTree(activity, contentRoot, contentRoot, WallpaperTarget.SETTINGS);
         int children = container.getChildCount();
         for (int index = 0; index < children; index++) {
@@ -197,10 +221,21 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             if (pageRoot != null && pageRoot.getVisibility() == View.VISIBLE) {
                 makeSettingsPageTransparent(activity, pageRoot, contentRoot);
                 installControlRows(activity, pageRoot, contentRoot);
-                styleTextTree(activity, pageRoot, contentRoot, WallpaperTarget.SETTINGS);
             }
         }
         log("Settings wallpaper refreshed for " + children + " page roots");
+    }
+
+    private static int settingsPageSignature(ViewGroup container, ViewGroup contentRoot) {
+        int signature = 31 * contentRoot.getWidth() + contentRoot.getHeight();
+        int children = container.getChildCount();
+        for (int index = 0; index < children; index++) {
+            View child = container.getChildAt(index);
+            signature = 31 * signature + (child.getVisibility() * 31)
+                    + child.getWidth() + child.getHeight()
+                    + (child instanceof ViewGroup ? ((ViewGroup) child).getChildCount() : 0);
+        }
+        return signature;
     }
 
     private static void makeSettingsPageTransparent(Activity activity, View pageRoot, ViewGroup contentRoot) {
@@ -225,6 +260,9 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     }
 
     private static void scanSettingsRows(Activity activity, ViewGroup group, ViewGroup contentRoot) {
+        if (group.getVisibility() != View.VISIBLE) {
+            return;
+        }
         for (int index = 0; index < group.getChildCount(); index++) {
             View child = group.getChildAt(index);
             if (isSettingsRow(child, contentRoot)) {
@@ -246,25 +284,33 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     }
 
     private static void scanControls(Activity activity, ViewGroup group, ViewGroup contentRoot) {
+        if (group.getVisibility() != View.VISIBLE) {
+            return;
+        }
         for (int index = 0; index < group.getChildCount(); index++) {
             View child = group.getChildAt(index);
             if (isSettingsControl(child)) {
                 clearControlBackground(child);
                 View row = findControlRow(child, contentRoot);
                 if (row != null) {
-                    if (row.getHeight() > 0 && row.getHeight() <= 140) {
-                        clearControlBackgroundTree(row);
-                    }
-
                     if (row.getWidth() > 0 && row.getHeight() > 0) {
                         clearControlBackgroundTree(row);
-                        log("Settings control row made transparent for " + describe(child) + " -> " + describe(row));
+                        debugLog("Settings control row made transparent for " + describe(child) + " -> " + describe(row));
                     } else {
-                        row.postOnAnimation(() -> applyControlRow(activity, child, row, contentRoot));
-                        log("Settings control row pending: " + describe(child) + " -> " + describe(row));
+                        synchronized (SETTINGS_PENDING_ROWS) {
+                            if (SETTINGS_PENDING_ROWS.add(row)) {
+                                row.postOnAnimation(() -> {
+                                    synchronized (SETTINGS_PENDING_ROWS) {
+                                        SETTINGS_PENDING_ROWS.remove(row);
+                                    }
+                                    applyControlRow(activity, child, row, contentRoot);
+                                });
+                            }
+                        }
+                        debugLog("Settings control row pending: " + describe(child) + " -> " + describe(row));
                     }
                 } else {
-                    log("Settings control detected: " + describe(child) + " parents=" + describeParents(child, contentRoot));
+                    debugLog("Settings control detected: " + describe(child) + " parents=" + describeParents(child, contentRoot));
                 }
             }
             if (child instanceof ViewGroup) {
@@ -279,7 +325,7 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 clearControlBackgroundTree(row);
             }
             clearControlBackgroundTree(row);
-            log("Settings control row made transparent for " + describe(control) + " -> " + describe(row));
+            debugLog("Settings control row made transparent for " + describe(control) + " -> " + describe(row));
         }
     }
 
@@ -450,6 +496,9 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     }
 
     private static void styleTextTree(Activity activity, View view, ViewGroup contentRoot, WallpaperTarget target) {
+        if (view.getVisibility() != View.VISIBLE) {
+            return;
+        }
         if (view instanceof TextView && shouldStyleText(view)) {
             styleTextView(activity, (TextView) view, contentRoot, target);
         }
@@ -487,6 +536,13 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         float sourceX = (viewportX + textView.getWidth() / 2f - values.translateX) / values.scale;
         float sourceY = (viewportY + textView.getHeight() / 2f - values.translateY) / values.scale;
         boolean light = TextContrast.isLightRegion(bitmap, sourceX, sourceY, 12);
+        int signature = (light ? 1 : 0) * 31 + (int) (sourceX / 24f) * 17
+                + (int) (sourceY / 24f) * 13 + target.ordinal();
+        Integer previousSignature = TEXT_STYLE_SIGNATURE.get(textView);
+        if (previousSignature != null && previousSignature == signature) {
+            return;
+        }
+        TEXT_STYLE_SIGNATURE.put(textView, signature);
         ColorStateList original = ORIGINAL_TEXT_COLORS.get(textView);
         if (original == null) {
             original = textView.getTextColors();
@@ -634,6 +690,12 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         }
         return resourceName + " " + view.getClass().getSimpleName() + " "
                 + view.getWidth() + "x" + view.getHeight();
+    }
+
+    private static void debugLog(String message) {
+        if (DEBUG_LOGGING) {
+            XposedBridge.log(TAG + ": " + message);
+        }
     }
 
     private static void log(String message) {
