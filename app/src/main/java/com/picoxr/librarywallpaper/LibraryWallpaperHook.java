@@ -93,8 +93,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
                 View view = (View) param.thisObject;
-                if (isSwitchControl(view)) {
-                    clearSwitchBackground(view);
+                if (isSettingsControl(view)) {
+                    clearControlBackground(view);
                     return;
                 }
                 restoreSettingsSurface(view);
@@ -201,11 +201,13 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         for (int index = 0; index < group.getChildCount(); index++) {
             View child = group.getChildAt(index);
             if (isSettingsControl(child)) {
-                if (isSwitchControl(child)) {
-                    clearSwitchBackground(child);
-                }
+                clearControlBackground(child);
                 View row = findControlRow(child, contentRoot);
                 if (row != null) {
+                    if (row.getHeight() > 0 && row.getHeight() <= 140) {
+                        clearControlBackgroundTree(row);
+                    }
+
                     if (row.getWidth() > 0 && row.getHeight() > 0) {
                         install(activity, row, WallpaperTarget.SETTINGS, contentRoot, true);
                         log("Settings control row applied for " + describe(child) + " -> " + describe(row));
@@ -225,6 +227,9 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
 
     private static void applyControlRow(Activity activity, View control, View row, ViewGroup contentRoot) {
         if (row.getWidth() > 0 && row.getHeight() > 0) {
+            if (row.getHeight() <= 140) {
+                clearControlBackgroundTree(row);
+            }
             install(activity, row, WallpaperTarget.SETTINGS, contentRoot, true);
             log("Settings control row applied for " + describe(control) + " -> " + describe(row));
         }
@@ -242,6 +247,16 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             current = parent instanceof View ? (View) parent : null;
         }
         return result.toString();
+    }
+
+    private static void clearControlBackgroundTree(View view) {
+        clearControlBackground(view);
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int index = 0; index < group.getChildCount(); index++) {
+                clearControlBackgroundTree(group.getChildAt(index));
+            }
+        }
     }
 
     private static boolean isSettingsControl(View view) {
@@ -262,11 +277,11 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 || className.equals("android.widget.Switch") || className.equals("android.widget.SwitchButton");
     }
 
-    private static void clearSwitchBackground(View view) {
+    private static void clearControlBackground(View view) {
         synchronized (APPLYING_SETTINGS_SURFACES) {
             if (APPLYING_SETTINGS_SURFACES.add(view)) {
                 try {
-                    view.setBackground(null);
+                    view.setBackgroundColor(Color.TRANSPARENT);
                 } finally {
                     APPLYING_SETTINGS_SURFACES.remove(view);
                 }
