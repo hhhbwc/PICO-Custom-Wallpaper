@@ -294,7 +294,10 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         }
         String resourceName = resourceName(view);
         return resourceName.endsWith("Toggle") || resourceName.endsWith("Switch")
-                || resourceName.contains("powerModeOption") || resourceName.contains("Option");
+                || resourceName.contains("powerModeOption") || resourceName.contains("Option")
+                || resourceName.startsWith("controller_") && resourceName.endsWith("Bg")
+                || resourceName.equals("controller_preferredLeft")
+                || resourceName.equals("controller_preferredRight");
     }
 
     private static boolean isSwitchControl(View view) {
@@ -308,7 +311,9 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             if (APPLYING_SETTINGS_SURFACES.add(view)) {
                 try {
                     view.setBackgroundColor(Color.TRANSPARENT);
-                    if (isOpaqueSettingsContainer(view)) {
+                    view.setBackgroundTintList(null);
+                    if (isOpaqueSettingsContainer(view)
+                            || isHandednessOptionContainer(view)) {
                         view.setForeground(null);
                     }
                 } finally {
@@ -318,12 +323,33 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         }
     }
 
+    private static boolean isHandednessOptionContainer(View view) {
+        if (!(view.getParent() instanceof ViewGroup)) {
+            return false;
+        }
+        ViewParent parent = view.getParent();
+        if (!(parent instanceof ViewGroup)) {
+            return false;
+        }
+        ViewGroup group = (ViewGroup) parent;
+        for (int index = 0; index < group.getChildCount(); index++) {
+            String name = resourceName(group.getChildAt(index));
+            if (name.equals("controller_preferredLeft") || name.equals("controller_preferredRight")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean isOpaqueSettingsContainer(View view) {
         String className = view.getClass().getName();
+        String name = resourceName(view);
         return className.endsWith("ConfigItemView")
                 || className.endsWith("ConfigItemLayout")
                 || className.endsWith("HoveredLinearLayout")
-                || className.endsWith("OSUILinearLayout");
+                || className.endsWith("OSUILinearLayout")
+                || name.equals("controller_preferredLeft")
+                || name.equals("controller_preferredRight");
     }
 
     private static View findControlRow(View control, ViewGroup contentRoot) {
