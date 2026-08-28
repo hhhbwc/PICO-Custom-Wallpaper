@@ -195,12 +195,25 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         for (int index = 0; index < children; index++) {
             View pageRoot = container.getChildAt(index);
             if (pageRoot != null && pageRoot.getVisibility() == View.VISIBLE) {
-                install(activity, pageRoot, WallpaperTarget.SETTINGS, contentRoot, true);
+                makeSettingsPageTransparent(activity, pageRoot, contentRoot);
                 installControlRows(activity, pageRoot, contentRoot);
                 styleTextTree(activity, pageRoot, contentRoot, WallpaperTarget.SETTINGS);
             }
         }
         log("Settings wallpaper refreshed for " + children + " page roots");
+    }
+
+    private static void makeSettingsPageTransparent(Activity activity, View pageRoot, ViewGroup contentRoot) {
+        synchronized (APPLYING_SETTINGS_SURFACES) {
+            if (APPLYING_SETTINGS_SURFACES.add(pageRoot)) {
+                try {
+                    pageRoot.setBackgroundColor(Color.TRANSPARENT);
+                } finally {
+                    APPLYING_SETTINGS_SURFACES.remove(pageRoot);
+                }
+            }
+        }
+        SETTINGS_SURFACES.put(pageRoot, new WallpaperSurface(activity, contentRoot, true));
     }
 
     private static void installControlRows(Activity activity, View pageRoot, ViewGroup contentRoot) {
@@ -216,7 +229,6 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             View child = group.getChildAt(index);
             if (isSettingsRow(child, contentRoot)) {
                 clearControlBackgroundTree(child);
-                install(activity, child, WallpaperTarget.SETTINGS, contentRoot, true);
             }
             if (child instanceof ViewGroup) {
                 scanSettingsRows(activity, (ViewGroup) child, contentRoot);
@@ -245,8 +257,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                     }
 
                     if (row.getWidth() > 0 && row.getHeight() > 0) {
-                        install(activity, row, WallpaperTarget.SETTINGS, contentRoot, true);
-                        log("Settings control row applied for " + describe(child) + " -> " + describe(row));
+                        clearControlBackgroundTree(row);
+                        log("Settings control row made transparent for " + describe(child) + " -> " + describe(row));
                     } else {
                         row.postOnAnimation(() -> applyControlRow(activity, child, row, contentRoot));
                         log("Settings control row pending: " + describe(child) + " -> " + describe(row));
@@ -266,8 +278,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             if (row.getHeight() <= 140) {
                 clearControlBackgroundTree(row);
             }
-            install(activity, row, WallpaperTarget.SETTINGS, contentRoot, true);
-            log("Settings control row applied for " + describe(control) + " -> " + describe(row));
+            clearControlBackgroundTree(row);
+            log("Settings control row made transparent for " + describe(control) + " -> " + describe(row));
         }
     }
 
