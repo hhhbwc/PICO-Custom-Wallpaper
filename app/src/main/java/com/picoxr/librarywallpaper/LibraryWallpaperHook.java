@@ -35,7 +35,9 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             "android.widget.Switch",
             "androidx.appcompat.widget.SwitchCompat",
             "com.picovr.customviews.DropdownOptionView",
-            "com.picovr.customviews.ConfigSwitchLayout"
+            "com.picovr.customviews.ConfigSwitchLayout",
+            "com.picovr.customviews.ConfigItemView",
+            "com.picovr.customviews.ConfigItemLayout"
     };
     private static final Set<ViewGroup> SETTINGS_CONTAINERS =
             Collections.newSetFromMap(new WeakHashMap<>());
@@ -306,11 +308,22 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             if (APPLYING_SETTINGS_SURFACES.add(view)) {
                 try {
                     view.setBackgroundColor(Color.TRANSPARENT);
+                    if (isOpaqueSettingsContainer(view)) {
+                        view.setForeground(null);
+                    }
                 } finally {
                     APPLYING_SETTINGS_SURFACES.remove(view);
                 }
             }
         }
+    }
+
+    private static boolean isOpaqueSettingsContainer(View view) {
+        String className = view.getClass().getName();
+        return className.endsWith("ConfigItemView")
+                || className.endsWith("ConfigItemLayout")
+                || className.endsWith("HoveredLinearLayout")
+                || className.endsWith("OSUILinearLayout");
     }
 
     private static View findControlRow(View control, ViewGroup contentRoot) {
