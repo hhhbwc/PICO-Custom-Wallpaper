@@ -179,6 +179,7 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         installSettingsNavigation(activity, contentRoot);
         install(activity, container, WallpaperTarget.SETTINGS, contentRoot, true);
         scanControls(activity, contentRoot, contentRoot);
+        scanSettingsRows(activity, contentRoot, contentRoot);
         int children = container.getChildCount();
         for (int index = 0; index < children; index++) {
             View pageRoot = container.getChildAt(index);
@@ -195,6 +196,29 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             return;
         }
         scanControls(activity, (ViewGroup) pageRoot, contentRoot);
+        scanSettingsRows(activity, (ViewGroup) pageRoot, contentRoot);
+    }
+
+    private static void scanSettingsRows(Activity activity, ViewGroup group, ViewGroup contentRoot) {
+        for (int index = 0; index < group.getChildCount(); index++) {
+            View child = group.getChildAt(index);
+            if (isSettingsRow(child, contentRoot)) {
+                clearControlBackgroundTree(child);
+                install(activity, child, WallpaperTarget.SETTINGS, contentRoot, true);
+            }
+            if (child instanceof ViewGroup) {
+                scanSettingsRows(activity, (ViewGroup) child, contentRoot);
+            }
+        }
+    }
+
+    private static boolean isSettingsRow(View view, ViewGroup contentRoot) {
+        if (!(view instanceof ViewGroup) || view == contentRoot) {
+            return false;
+        }
+        int width = view.getWidth();
+        int height = view.getHeight();
+        return width >= 600 && width <= 850 && height >= 60 && height <= 140;
     }
 
     private static void scanControls(Activity activity, ViewGroup group, ViewGroup contentRoot) {
