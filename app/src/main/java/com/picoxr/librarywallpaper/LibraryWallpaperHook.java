@@ -328,6 +328,9 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             if (isGlassButton(child) || isQuickPanelListItem(child)) {
                 applyGlassSurface(child, card, blurred, full, transform,
                         originalRadius(child, defaultRadius));
+                if (child instanceof ViewGroup) {
+                    clearNativePillBackground((ViewGroup) child);
+                }
                 continue;
             }
             if (child instanceof ViewGroup) {
@@ -401,6 +404,21 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                         full.getWidth(), full.getHeight(), radius));
             } finally {
                 APPLYING_SETTINGS_SURFACES.remove(view);
+            }
+        }
+    }
+
+    // 清掉玻璃按钮内层的原生药丸背景(9-patch 自带浅色描边),避免与玻璃边框形成双框
+    private static void clearNativePillBackground(ViewGroup glassed) {
+        for (int index = 0; index < glassed.getChildCount(); index++) {
+            View child = glassed.getChildAt(index);
+            if (!(child instanceof ViewGroup)) {
+                continue;
+            }
+            Drawable background = child.getBackground();
+            if (background instanceof android.graphics.drawable.StateListDrawable
+                    || background instanceof android.graphics.drawable.NinePatchDrawable) {
+                child.setBackground(null);
             }
         }
     }

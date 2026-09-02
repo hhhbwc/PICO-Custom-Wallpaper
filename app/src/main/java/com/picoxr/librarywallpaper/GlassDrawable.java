@@ -98,7 +98,8 @@ final class GlassDrawable extends Drawable {
         canvas.drawRoundRect(rect, radius, radius, overlay);
         overlay.setStyle(Paint.Style.STROKE);
         overlay.setStrokeWidth(Math.max(1f, radius * 0.05f));
-        overlay.setColor(hasState(state, android.R.attr.state_focused) ? BORDER_FOCUSED : BORDER);
+        overlay.setColor(hasState(state, android.R.attr.state_focused)
+                || hasState(state, android.R.attr.state_hovered) ? BORDER_FOCUSED : BORDER);
         float inset = overlay.getStrokeWidth() / 2f;
         rect.inset(inset, inset);
         canvas.drawRoundRect(rect, Math.max(0f, radius - inset), Math.max(0f, radius - inset),
