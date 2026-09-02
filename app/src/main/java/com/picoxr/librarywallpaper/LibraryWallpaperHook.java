@@ -68,6 +68,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             Collections.synchronizedMap(new WeakHashMap<>());
     private static final Set<View> APPLYING_SETTINGS_SURFACES =
             Collections.newSetFromMap(new WeakHashMap<>());
+    private static final Map<View, GlassSurface> GLASS_SURFACES =
+            Collections.synchronizedMap(new WeakHashMap<>());
     private static final Set<View> TRANSPARENT_SETTINGS_SURFACES =
             Collections.newSetFromMap(new WeakHashMap<>());
     private static final Map<TextView, ColorStateList> ORIGINAL_TEXT_COLORS =
@@ -76,6 +78,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             Collections.synchronizedMap(new WeakHashMap<>());
     // 进程级壁纸缓存与异步加载:位图解码和配置 binder 调用都不再占用主线程
     private static final Map<WallpaperTarget, Bitmap> WALLPAPER_CACHE =
+            new ConcurrentHashMap<>();
+    private static final Map<WallpaperTarget, Bitmap> BLURRED_CACHE =
             new ConcurrentHashMap<>();
     private static final Map<WallpaperTarget, WallpaperConfig> WALLPAPER_CONFIG =
             new ConcurrentHashMap<>();
@@ -180,6 +184,11 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     }
 
     private static void restoreSettingsSurface(View view) {
+        GlassSurface glass = GLASS_SURFACES.get(view);
+        if (glass != null && glass.cardRoot != null) {
+            reapplyGlassSurface(view, glass);
+            return;
+        }
         WallpaperSurface surface = SETTINGS_SURFACES.get(view);
         synchronized (APPLYING_SETTINGS_SURFACES) {
             if (surface == null || APPLYING_SETTINGS_SURFACES.contains(view)) {
@@ -291,6 +300,138 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         // contentRoot 取面板自身:设置壁纸以面板窗口为视口铺满,文字对比度按面板区域统一决策
         install(activity, root, WallpaperTarget.SETTINGS, root, true);
         styleTextTree(activity, root, root, WallpaperTarget.SETTINGS);
+        glassQuickPanelButtons(root);
+    }
+
+    // 面板快捷格/滑条加毛玻璃:采样壁纸模糊图中按钮背后的区域,叠加高光让控件从壁纸上凸显
+    private static void glassQuickPanelButtons(ViewGroup card) {
+        Bitmap blurred = BLURRED_CACHE.get(WallpaperTarget.SETTINGS);
+        Bitmap full = WALLPAPER_CACHE.get(WallpaperTarget.SETTINGS);
+        WallpaperConfig config = WALLPAPER_CONFIG.get(WallpaperTarget.SETTINGS);
+        if (blurred == null || full == null || full.isRecycled()
+                || config == null || !config.enabled
+                || card.getWidth() == 0 || card.getHeight() == 0) {
+            return;
+        }
+        float defaultRadius = defaultGlassRadius(card);
+        glassTree(card, card, blurred, full, config.transform, defaultRadius);
+    }
+
+    private static void glassTree(ViewGroup card, ViewGroup group, Bitmap blurred, Bitmap full,
+            WallpaperTransform transform, float defaultRadius) {
+        for (int index = 0; index < group.getChildCount(); index++) {
+            View child = group.getChildAt(index);
+            if (child == null || child.getVisibility() != View.VISIBLE) {
+                continue;
+            }
+            if (isGlassButton(child) || isQuickPanelListItem(child)) {
+                applyGlassSurface(child, card, blurred, full, transform,
+                        originalRadius(child, defaultRadius));
+                continue;
+            }
+            if (child instanceof ViewGroup) {
+                glassTree(card, (ViewGroup) child, blurred, full, transform, defaultRadius);
+            }
+        }
+    }
+
+    private static boolean isQuickPanelListItem(View view) {
+        ViewParent parent = view.getParent();
+        return parent != null
+                && "androidx.recyclerview.widget.RecyclerView".equals(parent.getClass().getName());
+    }
+
+    private static boolean isGlassButton(View view) {
+        String className = view.getClass().getName();
+        if (!className.startsWith("com.picovr.quicksettings.")) {
+            return false;
+        }
+        String simpleName = className.substring(className.lastIndexOf('.') + 1);
+        return simpleName.endsWith("Tile") || simpleName.endsWith("SettingButton")
+                || simpleName.endsWith("SeekLayout");
+    }
+
+    private static float defaultGlassRadius(ViewGroup card) {
+        try {
+            int id = card.getResources().getIdentifier("Main_ConnerSize", "dimen", SETTINGS);
+            if (id != 0) {
+                return card.getResources().getDimension(id);
+            }
+        } catch (Throwable ignored) {
+        }
+        return 28f * card.getResources().getDisplayMetrics().density;
+    }
+
+    private static float originalRadius(View view, float defaultRadius) {
+        try {
+            Drawable background = view.getBackground();
+            if (background instanceof android.graphics.drawable.GradientDrawable) {
+                float radius = ((android.graphics.drawable.GradientDrawable) background)
+                        .getCornerRadius();
+                if (radius > 0f) {
+                    return radius;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return defaultRadius;
+    }
+
+    private static void applyGlassSurface(View view, ViewGroup card, Bitmap blurred, Bitmap full,
+            WallpaperTransform transform, float radius) {
+        GlassSurface existing = GLASS_SURFACES.get(view);
+        int[] cardLocation = new int[2];
+        int[] viewLocation = new int[2];
+        card.getLocationInWindow(cardLocation);
+        view.getLocationInWindow(viewLocation);
+        float viewportX = viewLocation[0] - cardLocation[0];
+        float viewportY = viewLocation[1] - cardLocation[1];
+        if (existing != null && existing.cardRoot == card) {
+            Drawable background = view.getBackground();
+            if (background instanceof GlassDrawable
+                    && ((GlassDrawable) background).matches(blurred, transform,
+                    card.getWidth(), card.getHeight(), viewportX, viewportY)) {
+                return;
+            }
+        }
+        GLASS_SURFACES.put(view, new GlassSurface(card, blurred, transform, full.getWidth(),
+                full.getHeight(), radius));
+        debugLog("glass on " + describe(view) + " viewport=" + (int) viewportX + "," + (int) viewportY);
+        synchronized (APPLYING_SETTINGS_SURFACES) {
+            if (APPLYING_SETTINGS_SURFACES.contains(view)) {
+                return;
+            }
+            APPLYING_SETTINGS_SURFACES.add(view);
+            try {
+                view.setBackground(new GlassDrawable(blurred, transform, full.getWidth(),
+                        full.getHeight(), card.getWidth(), card.getHeight(),
+                        viewportX, viewportY, radius));
+            } finally {
+                APPLYING_SETTINGS_SURFACES.remove(view);
+            }
+        }
+    }
+
+    private static void reapplyGlassSurface(View view, GlassSurface glass) {
+        synchronized (APPLYING_SETTINGS_SURFACES) {
+            if (APPLYING_SETTINGS_SURFACES.contains(view) || !view.isAttachedToWindow()
+                    || glass.cardRoot.getWidth() == 0) {
+                return;
+            }
+            int[] cardLocation = new int[2];
+            int[] viewLocation = new int[2];
+            glass.cardRoot.getLocationInWindow(cardLocation);
+            view.getLocationInWindow(viewLocation);
+            APPLYING_SETTINGS_SURFACES.add(view);
+            try {
+                view.setBackground(new GlassDrawable(glass.blurred, glass.transform,
+                        glass.imageWidth, glass.imageHeight, glass.cardRoot.getWidth(),
+                        glass.cardRoot.getHeight(), viewLocation[0] - cardLocation[0],
+                        viewLocation[1] - cardLocation[1], glass.radius));
+            } finally {
+                APPLYING_SETTINGS_SURFACES.remove(view);
+            }
+        }
     }
 
     // 壁纸替换掉原圆角背景后,按原背景的圆角半径裁剪,保持面板原生外形
@@ -874,6 +1015,7 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 }
                 BITMAP_UNAVAILABLE_WARNED.remove(target);
                 WALLPAPER_CACHE.put(target, loaded);
+                BLURRED_CACHE.put(target, blurredThumbnail(loaded));
                 // 新位图内容与旧的不同,文字对比度需要重新决策
                 TEXT_STYLE_SIGNATURE.clear();
                 postRefresh();
@@ -902,6 +1044,24 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             mainHandler().post(LibraryWallpaperHook::refreshKnownActivities);
         } catch (Throwable throwable) {
             debugLog("post refresh failed: " + throwable);
+        }
+    }
+
+    private static Bitmap blurredThumbnail(Bitmap bitmap) {
+        try {
+            int quarterWidth = Math.max(1, bitmap.getWidth() / 4);
+            int quarterHeight = Math.max(1, bitmap.getHeight() / 4);
+            Bitmap quarter = Bitmap.createScaledBitmap(bitmap, quarterWidth, quarterHeight, true);
+            int blurWidth = Math.max(1, bitmap.getWidth() / 16);
+            Bitmap blurred = Bitmap.createScaledBitmap(quarter, blurWidth,
+                    Math.max(1, blurWidth * quarter.getHeight() / quarter.getWidth()), true);
+            if (blurred != quarter) {
+                quarter.recycle();
+            }
+            return blurred;
+        } catch (Throwable throwable) {
+            debugLog("blur thumbnail failed: " + throwable);
+            return null;
         }
     }
 
@@ -966,6 +1126,25 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
 
     private static void log(String message) {
         XposedBridge.log(TAG + ": " + message);
+    }
+
+    private static final class GlassSurface {
+        final ViewGroup cardRoot;
+        final Bitmap blurred;
+        final WallpaperTransform transform;
+        final int imageWidth;
+        final int imageHeight;
+        final float radius;
+
+        GlassSurface(ViewGroup cardRoot, Bitmap blurred, WallpaperTransform transform,
+                int imageWidth, int imageHeight, float radius) {
+            this.cardRoot = cardRoot;
+            this.blurred = blurred;
+            this.transform = transform;
+            this.imageWidth = imageWidth;
+            this.imageHeight = imageHeight;
+            this.radius = radius;
+        }
     }
 
     private static final class WallpaperSurface {
