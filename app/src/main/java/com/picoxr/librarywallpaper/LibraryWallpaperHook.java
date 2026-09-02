@@ -99,7 +99,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 thread.setDaemon(true);
                 return thread;
             });
-    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
+    // 模块在 Zygote fork 早期加载,主 Looper 尚未就绪,Handler 必须延迟到主线程可用时再创建
+    private static volatile Handler mainHandler;
     private static final long CONFIG_TTL_MS = 2000L;
 
     @Override
@@ -758,7 +759,7 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                     return;
                 }
                 WALLPAPER_CONFIG.put(target, fresh);
-                MAIN_HANDLER.post(LibraryWallpaperHook::refreshKnownActivities);
+                postRefresh();
             } catch (Throwable throwable) {
                 PENDING_CONFIG_LOADS.remove(target);
                 debugLog("config refresh failed: " + throwable);
@@ -817,12 +818,33 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 WALLPAPER_CACHE.put(target, loaded);
                 // 新位图内容与旧的不同,文字对比度需要重新决策
                 TEXT_STYLE_SIGNATURE.clear();
-                MAIN_HANDLER.post(LibraryWallpaperHook::refreshKnownActivities);
+                postRefresh();
             } catch (Throwable throwable) {
                 PENDING_BITMAP_LOADS.remove(target);
                 debugLog("wallpaper load failed: " + throwable);
             }
         });
+    }
+
+    private static Handler mainHandler() {
+        Handler handler = mainHandler;
+        if (handler == null) {
+            synchronized (LibraryWallpaperHook.class) {
+                handler = mainHandler;
+                if (handler == null) {
+                    mainHandler = handler = new Handler(Looper.getMainLooper());
+                }
+            }
+        }
+        return handler;
+    }
+
+    private static void postRefresh() {
+        try {
+            mainHandler().post(LibraryWallpaperHook::refreshKnownActivities);
+        } catch (Throwable throwable) {
+            debugLog("post refresh failed: " + throwable);
+        }
     }
 
     private static void refreshKnownActivities() {
