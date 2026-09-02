@@ -455,13 +455,15 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 GLASS_SURFACES.remove(view);
                 continue;
             }
+            GlassDrawable drawable = (GlassDrawable) view.getBackground();
             view.getLocationInWindow(glass.viewViewport);
             glass.cardRoot.getLocationInWindow(glass.cardViewport);
             float relativeX = glass.viewViewport[0] - glass.cardViewport[0];
             float relativeY = glass.viewViewport[1] - glass.cardViewport[1];
+            float quantum = drawable.samplingQuantum();
             boolean moved = Float.isNaN(glass.lastX)
-                    || Math.abs(relativeX - glass.lastX) > 0.5f
-                    || Math.abs(relativeY - glass.lastY) > 0.5f;
+                    || Math.abs(relativeX - glass.lastX) >= quantum
+                    || Math.abs(relativeY - glass.lastY) >= quantum;
             boolean resized = glass.cardWidth != glass.cardRoot.getWidth()
                     || glass.cardHeight != glass.cardRoot.getHeight();
             if (moved || resized) {

@@ -26,6 +26,8 @@ final class GlassDrawable extends Drawable {
     private final int imageWidth;
     private final int imageHeight;
     private final float radius;
+    // 采样量化步长:模糊图里 1 像素对应的卡片位移,步长内的移动不影响观感但免去重录显示列表
+    private final float quantum;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint overlay = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
@@ -43,6 +45,13 @@ final class GlassDrawable extends Drawable {
         this.imageWidth = imageWidth;
         this.imageHeight = imageHeight;
         this.radius = radius;
+        this.quantum = blurred == null || blurred.getWidth() == 0 ? 16f
+                : Math.max(12f, Math.min(128f,
+                transform.scale * imageWidth / blurred.getWidth()));
+    }
+
+    float samplingQuantum() {
+        return quantum;
     }
 
     boolean matches(Bitmap otherBlurred, WallpaperTransform other) {
@@ -58,11 +67,11 @@ final class GlassDrawable extends Drawable {
                 || cardRoot.getHeight() == 0) {
             return;
         }
-        // 实时读取位置:滚动/布局变化时玻璃区域逐帧跟随按钮背后的壁纸
+        // 实时读取位置,并量化到步长网格:同格内的重绘采样同一区域,模糊下无感
         view.getLocationInWindow(viewLocation);
         cardRoot.getLocationInWindow(cardLocation);
-        float viewportX = viewLocation[0] - cardLocation[0];
-        float viewportY = viewLocation[1] - cardLocation[1];
+        float viewportX = Math.round((viewLocation[0] - cardLocation[0]) / quantum) * quantum;
+        float viewportY = Math.round((viewLocation[1] - cardLocation[1]) / quantum) * quantum;
         int cardWidth = cardRoot.getWidth();
         int cardHeight = cardRoot.getHeight();
         WallpaperTransform.RenderValues values = transform.render(imageWidth, imageHeight,
