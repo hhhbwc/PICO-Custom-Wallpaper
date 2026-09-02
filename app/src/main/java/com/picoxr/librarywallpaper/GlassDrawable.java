@@ -6,18 +6,22 @@ import android.graphics.ColorFilter;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.Path;
+import android.graphics.PorterDuff;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.view.ViewGroup;
 
-/** 按钮毛玻璃背景:每次绘制实时读取按钮在面板卡片内的位置,采样壁纸模糊缩略图对应区域,叠加高光与状态描边。 */
+/** 按钮毛玻璃背景:实时采样壁纸模糊缩略图对应区域,渲染结果缓存为位图,绘制时零裁剪操作。 */
 final class GlassDrawable extends Drawable {
     private static final int TINT = 0x22FFFFFF;
     private static final int TINT_PRESSED = 0x3CFFFFFF;
     private static final int BORDER = 0x30FFFFFF;
     private static final int BORDER_FOCUSED = 0xFF5AA9FF;
+    private static final int STATE_PRESSED = 1;
+    private static final int STATE_FOCUSED = 2;
+    private static final int STATE_HOVERED = 4;
 
     private final View view;
     private final ViewGroup cardRoot;
@@ -26,7 +30,7 @@ final class GlassDrawable extends Drawable {
     private final int imageWidth;
     private final int imageHeight;
     private final float radius;
-    // 采样量化步长:模糊图里 1 像素对应的卡片位移,步长内的移动不影响观感但免去重录显示列表
+    // 采样量化步长:模糊图里 1 像素对应的卡片位移,步长内的移动不影响观感但免去重渲染
     private final float quantum;
     // 被替换背景的固有尺寸,保持 wrap_content 布局不缩水;-1 表示无
     private final int intrinsicWidth;
@@ -40,6 +44,10 @@ final class GlassDrawable extends Drawable {
     private final Rect src = new Rect();
     private final int[] viewLocation = new int[2];
     private final int[] cardLocation = new int[2];
+    private Bitmap cache;
+    private float cacheCellX = Float.NaN;
+    private float cacheCellY = Float.NaN;
+    private int cacheState = -1;
 
     GlassDrawable(View view, ViewGroup cardRoot, Bitmap blurred, WallpaperTransform transform,
             int imageWidth, int imageHeight, float radius, int intrinsicWidth, int intrinsicHeight) {
@@ -59,6 +67,7 @@ final class GlassDrawable extends Drawable {
 
     void setStateOverlay(Drawable drawable) {
         stateOverlay = drawable;
+        cacheState = -1;
         invalidateSelf();
     }
 
@@ -92,47 +101,82 @@ final class GlassDrawable extends Drawable {
         // 实时读取位置,并量化到步长网格:同格内的重绘采样同一区域,模糊下无感
         view.getLocationInWindow(viewLocation);
         cardRoot.getLocationInWindow(cardLocation);
-        float viewportX = Math.round((viewLocation[0] - cardLocation[0]) / quantum) * quantum;
-        float viewportY = Math.round((viewLocation[1] - cardLocation[1]) / quantum) * quantum;
+        float cellX = Math.round((viewLocation[0] - cardLocation[0]) / quantum) * quantum;
+        float cellY = Math.round((viewLocation[1] - cardLocation[1]) / quantum) * quantum;
         int cardWidth = cardRoot.getWidth();
         int cardHeight = cardRoot.getHeight();
+        int state = stateSignature();
+        if (cache == null || cache.getWidth() != bounds.width()
+                || cache.getHeight() != bounds.height()
+                || cellX != cacheCellX || cellY != cacheCellY || state != cacheState) {
+            renderCache(bounds, cellX, cellY, cardWidth, cardHeight, state);
+            cacheCellX = cellX;
+            cacheCellY = cellY;
+            cacheState = state;
+        }
+        canvas.drawBitmap(cache, 0f, 0f, paint);
+    }
+
+    private void renderCache(Rect bounds, float cellX, float cellY, int cardWidth, int cardHeight,
+            int state) {
+        if (cache == null || cache.getWidth() != bounds.width()
+                || cache.getHeight() != bounds.height()) {
+            cache = Bitmap.createBitmap(Math.max(1, bounds.width()),
+                    Math.max(1, bounds.height()), Bitmap.Config.ARGB_8888);
+        }
+        Canvas cacheCanvas = new Canvas(cache);
+        cacheCanvas.drawColor(0, PorterDuff.Mode.CLEAR);
         WallpaperTransform.RenderValues values = transform.render(imageWidth, imageHeight,
                 cardWidth, cardHeight);
         float ratio = (float) blurred.getWidth() / imageWidth;
         rect.set(bounds);
         path.reset();
         path.addRoundRect(rect, radius, radius, Path.Direction.CW);
-        canvas.save();
-        canvas.clipPath(path);
-        int[] state = getState();
-        int left = clamp((viewportX - values.translateX) / values.scale * ratio,
+        cacheCanvas.save();
+        cacheCanvas.clipPath(path);
+        int left = clamp((cellX - values.translateX) / values.scale * ratio,
                 0, blurred.getWidth());
-        int top = clamp((viewportY - values.translateY) / values.scale * ratio,
+        int top = clamp((cellY - values.translateY) / values.scale * ratio,
                 0, blurred.getHeight());
-        int right = clamp((viewportX + bounds.width() - values.translateX) / values.scale * ratio,
+        int right = clamp((cellX + bounds.width() - values.translateX) / values.scale * ratio,
                 0, blurred.getWidth());
-        int bottom = clamp((viewportY + bounds.height() - values.translateY) / values.scale * ratio,
+        int bottom = clamp((cellY + bounds.height() - values.translateY) / values.scale * ratio,
                 0, blurred.getHeight());
         src.set(left, top, Math.max(left + 1, right), Math.max(top + 1, bottom));
-        canvas.drawBitmap(blurred, src, rect, paint);
+        cacheCanvas.drawBitmap(blurred, src, rect, paint);
         overlay.setStyle(Paint.Style.FILL);
-        overlay.setColor(hasState(state, android.R.attr.state_pressed) ? TINT_PRESSED : TINT);
-        canvas.drawRoundRect(rect, radius, radius, overlay);
+        overlay.setColor((state & STATE_PRESSED) != 0 ? TINT_PRESSED : TINT);
+        cacheCanvas.drawRoundRect(rect, radius, radius, overlay);
         if (stateOverlay != null) {
             // 系统切换的状态图案(开启态等)叠加在模糊层上,保留原生开启反馈
             stateOverlay.setBounds(bounds);
-            stateOverlay.setState(state);
-            stateOverlay.draw(canvas);
+            stateOverlay.setState(getState());
+            stateOverlay.draw(cacheCanvas);
         }
         overlay.setStyle(Paint.Style.STROKE);
         overlay.setStrokeWidth(Math.max(1f, radius * 0.05f));
-        overlay.setColor(hasState(state, android.R.attr.state_focused)
-                || hasState(state, android.R.attr.state_hovered) ? BORDER_FOCUSED : BORDER);
+        overlay.setColor((state & (STATE_FOCUSED | STATE_HOVERED)) != 0
+                ? BORDER_FOCUSED : BORDER);
         float inset = overlay.getStrokeWidth() / 2f;
         rect.inset(inset, inset);
-        canvas.drawRoundRect(rect, Math.max(0f, radius - inset), Math.max(0f, radius - inset),
-                overlay);
-        canvas.restore();
+        cacheCanvas.drawRoundRect(rect, Math.max(0f, radius - inset),
+                Math.max(0f, radius - inset), overlay);
+        cacheCanvas.restore();
+    }
+
+    private int stateSignature() {
+        int[] state = getState();
+        int signature = 0;
+        if (hasState(state, android.R.attr.state_pressed)) {
+            signature |= STATE_PRESSED;
+        }
+        if (hasState(state, android.R.attr.state_focused)) {
+            signature |= STATE_FOCUSED;
+        }
+        if (hasState(state, android.R.attr.state_hovered)) {
+            signature |= STATE_HOVERED;
+        }
+        return signature;
     }
 
     private static int clamp(float value, int min, int max) {

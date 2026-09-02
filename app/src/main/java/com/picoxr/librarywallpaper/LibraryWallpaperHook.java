@@ -493,7 +493,11 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     }
 
     private static void tickGlassViews() {
-        for (View view : GLASS_SURFACES.keySet().toArray(new View[0])) {
+        View[] views = GLASS_SURFACES.keySet().toArray(new View[0]);
+        ViewGroup lastCard = null;
+        int cardX = 0;
+        int cardY = 0;
+        for (View view : views) {
             GlassSurface glass = GLASS_SURFACES.get(view);
             if (glass == null || !view.isAttachedToWindow()
                     || !(view.getBackground() instanceof GlassDrawable)) {
@@ -502,9 +506,15 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             }
             GlassDrawable drawable = (GlassDrawable) view.getBackground();
             view.getLocationInWindow(glass.viewViewport);
-            glass.cardRoot.getLocationInWindow(glass.cardViewport);
-            float relativeX = glass.viewViewport[0] - glass.cardViewport[0];
-            float relativeY = glass.viewViewport[1] - glass.cardViewport[1];
+            // 面板卡片只有一个,卡片位置每帧只查一次
+            if (glass.cardRoot != lastCard) {
+                lastCard = glass.cardRoot;
+                lastCard.getLocationInWindow(glass.cardViewport);
+                cardX = glass.cardViewport[0];
+                cardY = glass.cardViewport[1];
+            }
+            float relativeX = glass.viewViewport[0] - cardX;
+            float relativeY = glass.viewViewport[1] - cardY;
             float quantum = drawable.samplingQuantum();
             boolean moved = Float.isNaN(glass.lastX)
                     || Math.abs(relativeX - glass.lastX) >= quantum
