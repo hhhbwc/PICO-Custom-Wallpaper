@@ -41,6 +41,12 @@ final class CenterCropDrawable extends Drawable {
         canvas.restore();
     }
 
+    boolean matches(Bitmap otherBitmap, WallpaperTransform other, int width, int height, int x, int y) {
+        return bitmap == otherBitmap && transform.scale == other.scale && transform.offsetX == other.offsetX
+                && transform.offsetY == other.offsetY && contentWidth == width && contentHeight == height
+                && viewportX == x && viewportY == y;
+    }
+
     @Override
     public void setAlpha(int alpha) {
         paint.setAlpha(alpha);

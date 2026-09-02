@@ -1,11 +1,15 @@
 package com.picoxr.librarywallpaper;
 
 import android.app.Activity;
+import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.BitmapFactory;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.View;
 import android.widget.TextView;
 import android.view.ViewGroup;
@@ -16,6 +20,10 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -56,16 +64,41 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             Collections.synchronizedMap(new WeakHashMap<>());
     private static final Set<View> APPLYING_SETTINGS_SURFACES =
             Collections.newSetFromMap(new WeakHashMap<>());
-    private static final Map<Activity, Map<WallpaperTarget, Bitmap>> BITMAP_CACHE =
-            Collections.synchronizedMap(new WeakHashMap<>());
-    private static final Map<Activity, Map<WallpaperTarget, WallpaperConfig>> CONFIG_CACHE =
-            Collections.synchronizedMap(new WeakHashMap<>());
     private static final Set<View> TRANSPARENT_SETTINGS_SURFACES =
             Collections.newSetFromMap(new WeakHashMap<>());
     private static final Map<TextView, ColorStateList> ORIGINAL_TEXT_COLORS =
             Collections.synchronizedMap(new WeakHashMap<>());
     private static final Map<TextView, Integer> TEXT_STYLE_SIGNATURE =
             Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<TextView, Integer> TEXT_POSITION_SIGNATURE =
+            Collections.synchronizedMap(new WeakHashMap<>());
+    // 进程级壁纸缓存与异步加载:位图解码和配置 binder 调用都不再占用主线程
+    private static final Map<WallpaperTarget, Bitmap> WALLPAPER_CACHE =
+            new ConcurrentHashMap<>();
+    private static final Map<WallpaperTarget, WallpaperConfig> WALLPAPER_CONFIG =
+            new ConcurrentHashMap<>();
+    private static final Map<WallpaperTarget, Long> CONFIG_FETCHED_AT =
+            new ConcurrentHashMap<>();
+    private static final Set<WallpaperTarget> PENDING_BITMAP_LOADS =
+            ConcurrentHashMap.newKeySet();
+    private static final Set<WallpaperTarget> BITMAP_UNAVAILABLE_WARNED =
+            ConcurrentHashMap.newKeySet();
+    private static final Set<WallpaperTarget> PENDING_CONFIG_LOADS =
+            ConcurrentHashMap.newKeySet();
+    private static final Set<Activity> KNOWN_ACTIVITIES =
+            Collections.newSetFromMap(new WeakHashMap<>());
+    private static final Set<Activity> APP_MANAGER_ACTIVITIES =
+            Collections.newSetFromMap(new WeakHashMap<>());
+    private static final Map<Activity, ViewGroup> SETTINGS_CONTAINER_BY_ACTIVITY =
+            Collections.synchronizedMap(new WeakHashMap<>());
+    private static final ExecutorService BACKGROUND_EXECUTOR =
+            Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "PicoLibraryWallpaper-Loader");
+                thread.setDaemon(true);
+                return thread;
+            });
+    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
+    private static final long CONFIG_TTL_MS = 2000L;
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
@@ -86,6 +119,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
                 Activity activity = (Activity) param.thisObject;
+                KNOWN_ACTIVITIES.add(activity);
+                APP_MANAGER_ACTIVITIES.add(activity);
                 installAppManager(activity);
                 styleAppManagerText(activity);
                 activity.getWindow().getDecorView().postOnAnimation(() -> {
@@ -103,6 +138,7 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
                 Activity activity = (Activity) param.thisObject;
+                KNOWN_ACTIVITIES.add(activity);
                 retrySettingsInstall(activity, 0);
             }
         });
@@ -160,6 +196,7 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
 
     private static void installSettings(Activity activity, ViewGroup container) {
         installSettingsLayoutListener(activity, container);
+        SETTINGS_CONTAINER_BY_ACTIVITY.put(activity, container);
         synchronized (SETTINGS_CONTAINERS) {
             if (SETTINGS_CONTAINERS.add(container)) {
                 container.setOnHierarchyChangeListener(new ViewGroup.OnHierarchyChangeListener() {
@@ -206,14 +243,15 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         if (contentRoot == null) {
             return;
         }
+        // install 本身已带去重(参数未变就跳过 setBackground),每次布局都执行开销极小
+        installSettingsNavigation(activity, contentRoot);
+        install(activity, container, WallpaperTarget.SETTINGS, contentRoot, true);
         int signature = settingsPageSignature(container, contentRoot);
         Integer previousSignature = SETTINGS_REFRESH_SIGNATURES.get(activity);
         if (previousSignature != null && previousSignature == signature) {
             return;
         }
         SETTINGS_REFRESH_SIGNATURES.put(activity, signature);
-        installSettingsNavigation(activity, contentRoot);
-        install(activity, container, WallpaperTarget.SETTINGS, contentRoot, true);
         styleTextTree(activity, contentRoot, contentRoot, WallpaperTarget.SETTINGS);
         int children = container.getChildCount();
         for (int index = 0; index < children; index++) {
@@ -535,13 +573,17 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 bitmap.getWidth(), bitmap.getHeight(), contentRoot.getWidth(), contentRoot.getHeight());
         float sourceX = (viewportX + textView.getWidth() / 2f - values.translateX) / values.scale;
         float sourceY = (viewportY + textView.getHeight() / 2f - values.translateY) / values.scale;
-        boolean light = TextContrast.isLightRegion(bitmap, sourceX, sourceY, 12);
-        int signature = (light ? 1 : 0) * 31 + (int) (sourceX / 24f) * 17
+        // 先用位置签名去重,位置未变就不做像素采样,避免滚动/动画时反复 JNI 读像素
+        int positionSignature = (int) (sourceX / 24f) * 17
                 + (int) (sourceY / 24f) * 13 + target.ordinal();
-        Integer previousSignature = TEXT_STYLE_SIGNATURE.get(textView);
-        if (previousSignature != null && previousSignature == signature) {
+        Integer previousPosition = TEXT_POSITION_SIGNATURE.get(textView);
+        if (previousPosition != null && previousPosition == positionSignature) {
             return;
         }
+        boolean light = TextContrast.isLightRegion(bitmap, sourceX, sourceY, 12);
+        int signature = (light ? 1 : 0) * 31 + positionSignature;
+        Integer previousSignature = TEXT_STYLE_SIGNATURE.get(textView);
+        TEXT_POSITION_SIGNATURE.put(textView, positionSignature);
         TEXT_STYLE_SIGNATURE.put(textView, signature);
         ColorStateList original = ORIGINAL_TEXT_COLORS.get(textView);
         if (original == null) {
@@ -584,7 +626,9 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         }
         Bitmap bitmap = cachedWallpaper(activity, target);
         if (bitmap == null) {
-            log(target.key + " wallpaper image unavailable");
+            if (BITMAP_UNAVAILABLE_WARNED.add(target)) {
+                log(target.key + " wallpaper image unavailable");
+            }
             return;
         }
         int[] rootLocation = new int[2];
@@ -597,39 +641,78 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             synchronized (APPLYING_SETTINGS_SURFACES) {
                 APPLYING_SETTINGS_SURFACES.add(view);
                 try {
-                    view.setBackground(new CenterCropDrawable(bitmap, config.transform, contentRoot.getWidth(),
-                            contentRoot.getHeight(), viewportX, viewportY));
+                    applyBackground(view, bitmap, config, contentRoot, viewportX, viewportY, target);
                 } finally {
                     APPLYING_SETTINGS_SURFACES.remove(view);
                 }
             }
             SETTINGS_SURFACES.put(view, new WallpaperSurface(activity, contentRoot, false));
         } else {
-            view.setBackground(new CenterCropDrawable(bitmap, config.transform, contentRoot.getWidth(),
-                    contentRoot.getHeight(), viewportX, viewportY));
+            applyBackground(view, bitmap, config, contentRoot, viewportX, viewportY, target);
         }
+    }
+
+    private static void applyBackground(View view, Bitmap bitmap, WallpaperConfig config,
+            ViewGroup contentRoot, int viewportX, int viewportY, WallpaperTarget target) {
+        android.graphics.drawable.Drawable existing = view.getBackground();
+        if (existing instanceof CenterCropDrawable
+                && ((CenterCropDrawable) existing).matches(bitmap, config.transform,
+                contentRoot.getWidth(), contentRoot.getHeight(), viewportX, viewportY)) {
+            return;
+        }
+        view.setBackground(new CenterCropDrawable(bitmap, config.transform, contentRoot.getWidth(),
+                contentRoot.getHeight(), viewportX, viewportY));
         log(target.key + " wallpaper applied to " + describe(view) + " at "
                 + viewportX + "," + viewportY + " in " + contentRoot.getWidth() + "x"
                 + contentRoot.getHeight());
     }
 
     private static WallpaperConfig cachedConfig(Activity activity, WallpaperTarget target) {
-        Map<WallpaperTarget, WallpaperConfig> cache = CONFIG_CACHE.get(activity);
-        if (cache == null) {
-            cache = new java.util.EnumMap<>(WallpaperTarget.class);
-            CONFIG_CACHE.put(activity, cache);
+        WallpaperConfig config = WALLPAPER_CONFIG.get(target);
+        long now = SystemClock.elapsedRealtime();
+        Long fetchedAt = CONFIG_FETCHED_AT.get(target);
+        if (fetchedAt == null || now - fetchedAt > CONFIG_TTL_MS) {
+            requestConfigRefresh(activity, target);
         }
-        WallpaperConfig config = cache.get(target);
-        if (config == null) {
-            config = readConfig(activity, target);
-            cache.put(target, config);
-        }
-        return config;
+        return config == null ? WallpaperConfig.disabled() : config;
     }
 
-    private static WallpaperConfig readConfig(Activity activity, WallpaperTarget target) {
+    private static void requestConfigRefresh(Activity activity, WallpaperTarget target) {
+        if (!PENDING_CONFIG_LOADS.add(target)) {
+            return;
+        }
+        WallpaperConfig previous = WALLPAPER_CONFIG.get(target);
+        Context context = activity.getApplicationContext();
+        BACKGROUND_EXECUTOR.execute(() -> {
+            try {
+                WallpaperConfig fresh = readConfig(context, target);
+                CONFIG_FETCHED_AT.put(target, SystemClock.elapsedRealtime());
+                PENDING_CONFIG_LOADS.remove(target);
+                if (configEquals(previous, fresh)) {
+                    return;
+                }
+                WALLPAPER_CONFIG.put(target, fresh);
+                MAIN_HANDLER.post(LibraryWallpaperHook::refreshKnownActivities);
+            } catch (Throwable throwable) {
+                PENDING_CONFIG_LOADS.remove(target);
+                debugLog("config refresh failed: " + throwable);
+            }
+        });
+    }
+
+    private static boolean configEquals(WallpaperConfig first, WallpaperConfig second) {
+        if (first == null || second == null) {
+            return first == second;
+        }
+        return first.enabled == second.enabled
+                && first.transform.scale == second.transform.scale
+                && first.transform.offsetX == second.transform.offsetX
+                && first.transform.offsetY == second.transform.offsetY;
+    }
+
+    private static WallpaperConfig readConfig(Context context, WallpaperTarget target) {
         try {
-            Bundle result = activity.getContentResolver().call(
+            Bundle result = context.getContentResolver().call(
                     WallpaperProvider.uriFor(target), "config", target.key, null);
             if (result == null || !result.getBoolean("enabled", false)) {
                 return WallpaperConfig.disabled();
@@ -644,24 +727,57 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     }
 
     private static Bitmap cachedWallpaper(Activity activity, WallpaperTarget target) {
-        Map<WallpaperTarget, Bitmap> cache = BITMAP_CACHE.get(activity);
-        if (cache == null) {
-            cache = new java.util.EnumMap<>(WallpaperTarget.class);
-            BITMAP_CACHE.put(activity, cache);
-        }
-        Bitmap bitmap = cache.get(target);
+        Bitmap bitmap = WALLPAPER_CACHE.get(target);
         if (bitmap != null && !bitmap.isRecycled()) {
             return bitmap;
         }
-        bitmap = loadWallpaper(activity, target);
-        if (bitmap != null) {
-            cache.put(target, bitmap);
-        }
-        return bitmap;
+        requestWallpaperLoad(activity, target);
+        return null;
     }
 
-    private static Bitmap loadWallpaper(Activity activity, WallpaperTarget target) {
-        try (InputStream stream = activity.getContentResolver().openInputStream(WallpaperProvider.uriFor(target))) {
+    private static void requestWallpaperLoad(Activity activity, WallpaperTarget target) {
+        if (!PENDING_BITMAP_LOADS.add(target)) {
+            return;
+        }
+        Context context = activity.getApplicationContext();
+        BACKGROUND_EXECUTOR.execute(() -> {
+            try {
+                Bitmap loaded = loadWallpaper(context, target);
+                PENDING_BITMAP_LOADS.remove(target);
+                if (loaded == null) {
+                    return;
+                }
+                BITMAP_UNAVAILABLE_WARNED.remove(target);
+                WALLPAPER_CACHE.put(target, loaded);
+                // 新位图内容与旧的不同,文字对比度需要重新采样
+                TEXT_STYLE_SIGNATURE.clear();
+                TEXT_POSITION_SIGNATURE.clear();
+                MAIN_HANDLER.post(LibraryWallpaperHook::refreshKnownActivities);
+            } catch (Throwable throwable) {
+                PENDING_BITMAP_LOADS.remove(target);
+                debugLog("wallpaper load failed: " + throwable);
+            }
+        });
+    }
+
+    private static void refreshKnownActivities() {
+        for (Activity activity : KNOWN_ACTIVITIES.toArray(new Activity[0])) {
+            try {
+                ViewGroup container = SETTINGS_CONTAINER_BY_ACTIVITY.get(activity);
+                if (container != null) {
+                    applySettingsPage(activity, container);
+                } else if (APP_MANAGER_ACTIVITIES.contains(activity)) {
+                    installAppManager(activity);
+                    styleAppManagerText(activity);
+                }
+            } catch (Throwable throwable) {
+                debugLog("refresh failed: " + throwable);
+            }
+        }
+    }
+
+    private static Bitmap loadWallpaper(Context context, WallpaperTarget target) {
+        try (InputStream stream = context.getContentResolver().openInputStream(WallpaperProvider.uriFor(target))) {
             return BitmapFactory.decodeStream(stream);
         } catch (Throwable ignored) {
             return null;
