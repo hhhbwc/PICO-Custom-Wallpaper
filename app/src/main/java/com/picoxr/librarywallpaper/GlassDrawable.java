@@ -16,7 +16,7 @@ import android.view.ViewGroup;
 final class GlassDrawable extends Drawable {
     private static final int TINT = 0x22FFFFFF;
     private static final int TINT_PRESSED = 0x3CFFFFFF;
-    private static final int BORDER = 0x66FFFFFF;
+    private static final int BORDER = 0x30FFFFFF;
     private static final int BORDER_FOCUSED = 0xFF5AA9FF;
 
     private final View view;
@@ -97,7 +97,7 @@ final class GlassDrawable extends Drawable {
         overlay.setColor(hasState(state, android.R.attr.state_pressed) ? TINT_PRESSED : TINT);
         canvas.drawRoundRect(rect, radius, radius, overlay);
         overlay.setStyle(Paint.Style.STROKE);
-        overlay.setStrokeWidth(Math.max(1.5f, radius * 0.08f));
+        overlay.setStrokeWidth(Math.max(1f, radius * 0.05f));
         overlay.setColor(hasState(state, android.R.attr.state_focused) ? BORDER_FOCUSED : BORDER);
         float inset = overlay.getStrokeWidth() / 2f;
         rect.inset(inset, inset);
