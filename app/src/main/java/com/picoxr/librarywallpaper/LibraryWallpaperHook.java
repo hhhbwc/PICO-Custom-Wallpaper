@@ -4,8 +4,10 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.BitmapFactory;
+import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -217,16 +219,13 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 return;
             }
             ViewGroup content = activity.findViewById(android.R.id.content);
-            if (content != null && content.getChildCount() > 0
-                    && content.getChildAt(0) instanceof ViewGroup) {
-                ViewGroup root = (ViewGroup) content.getChildAt(0);
-                if (root.getWidth() > 0 && root.getHeight() > 0) {
-                    QUICK_CONTAINER_BY_ACTIVITY.put(activity, root);
-                    root.getViewTreeObserver().addOnGlobalLayoutListener(
-                            () -> requestQuickRefresh(activity, root));
-                    applyQuickPanel(activity, root);
-                    return;
-                }
+            ViewGroup root = quickPanelContainer(activity, content);
+            if (root != null && root.getWidth() > 0 && root.getHeight() > 0) {
+                QUICK_CONTAINER_BY_ACTIVITY.put(activity, root);
+                root.getViewTreeObserver().addOnGlobalLayoutListener(
+                        () -> requestQuickRefresh(activity, root));
+                applyQuickPanel(activity, root);
+                return;
             }
             if (attempt < 10) {
                 retryQuickInstall(activity, attempt + 1);
@@ -234,6 +233,40 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 log("Quick settings wallpaper target unavailable");
             }
         }, attempt == 0 ? 0L : 16L);
+    }
+
+    private static ViewGroup quickPanelContainer(Activity activity, ViewGroup content) {
+        if (content == null) {
+            return null;
+        }
+        // 面板卡片是窗口内居中的 quicksetting_container,不能铺到整个透明窗口根上
+        int containerId = activity.getResources().getIdentifier("quicksetting_container", "id", SETTINGS);
+        if (containerId != 0) {
+            View card = activity.findViewById(containerId);
+            if (card instanceof ViewGroup) {
+                return (ViewGroup) card;
+            }
+        }
+        return findBackgroundedContainer(content, 0);
+    }
+
+    private static ViewGroup findBackgroundedContainer(ViewGroup group, int depth) {
+        if (depth > 3) {
+            return null;
+        }
+        for (int index = 0; index < group.getChildCount(); index++) {
+            View child = group.getChildAt(index);
+            if (child instanceof ViewGroup && child.getBackground() != null) {
+                return (ViewGroup) child;
+            }
+            if (child instanceof ViewGroup) {
+                ViewGroup found = findBackgroundedContainer((ViewGroup) child, depth + 1);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
     }
 
     private static void requestQuickRefresh(Activity activity, ViewGroup root) {
@@ -254,9 +287,34 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         if (!root.isAttachedToWindow() || root.getWidth() == 0 || root.getHeight() == 0) {
             return;
         }
+        clipQuickPanelToOriginalCorners(root);
         // contentRoot 取面板自身:设置壁纸以面板窗口为视口铺满,文字对比度按面板区域统一决策
         install(activity, root, WallpaperTarget.SETTINGS, root, true);
         styleTextTree(activity, root, root, WallpaperTarget.SETTINGS);
+    }
+
+    // 壁纸替换掉原圆角背景后,按原背景的圆角半径裁剪,保持面板原生外形
+    private static void clipQuickPanelToOriginalCorners(final ViewGroup card) {
+        Drawable background = card.getBackground();
+        if (!(background instanceof android.graphics.drawable.GradientDrawable)) {
+            return;
+        }
+        final float radius;
+        try {
+            radius = ((android.graphics.drawable.GradientDrawable) background).getCornerRadius();
+        } catch (Throwable throwable) {
+            return;
+        }
+        if (radius <= 0f) {
+            return;
+        }
+        card.setClipToOutline(true);
+        card.setOutlineProvider(new android.view.ViewOutlineProvider() {
+            @Override
+            public void getOutline(View view, android.graphics.Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), radius);
+            }
+        });
     }
 
     private static void installSettings(Activity activity, ViewGroup container) {
