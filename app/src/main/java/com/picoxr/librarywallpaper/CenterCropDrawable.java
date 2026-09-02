@@ -9,6 +9,8 @@ import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 
 final class CenterCropDrawable extends Drawable {
+    // 深色遮罩强度:保证浅色文字在任意壁纸区域可读,同时让全页文字颜色深浅一致
+    static final float SCRIM_ALPHA = 0.30f;
     private final Bitmap bitmap;
     private final WallpaperTransform transform;
     private final int contentWidth;
@@ -16,6 +18,7 @@ final class CenterCropDrawable extends Drawable {
     private final int viewportX;
     private final int viewportY;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private final Paint scrimPaint = new Paint();
 
     CenterCropDrawable(Bitmap bitmap, WallpaperTransform transform, int contentWidth, int contentHeight,
             int viewportX, int viewportY) {
@@ -25,6 +28,8 @@ final class CenterCropDrawable extends Drawable {
         this.contentHeight = contentHeight;
         this.viewportX = viewportX;
         this.viewportY = viewportY;
+        scrimPaint.setColor(0xFF000000);
+        scrimPaint.setAlpha(Math.round(255 * SCRIM_ALPHA));
     }
 
     @Override
@@ -39,6 +44,7 @@ final class CenterCropDrawable extends Drawable {
         canvas.scale(values.scale, values.scale);
         canvas.drawBitmap(bitmap, 0f, 0f, paint);
         canvas.restore();
+        canvas.drawRect(bounds, scrimPaint);
     }
 
     boolean matches(Bitmap otherBitmap, WallpaperTransform other, int width, int height, int x, int y) {

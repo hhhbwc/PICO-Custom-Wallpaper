@@ -39,6 +39,7 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     private static final boolean DEBUG_LOGGING = false;
     private static final String APP_MANAGER = "com.pvr.appmanager";
     private static final String SETTINGS = "com.picovr.settings";
+    private static final String UNITY_ACTIVITY = "com.picovr.vrsettingslib.UnityActivity";
     private static final String QUICK_SETTINGS_ACTIVITY =
             "com.picovr.quicksettings.QuickSettingsActivity";
     private static final String SIDE_NAVIGATION = "com.bytedance.osui.grouplist.OSUISideNavigation";
@@ -181,7 +182,36 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         } catch (Throwable throwable) {
             debugLog("Quick settings activity unavailable: " + throwable);
         }
+        // 设置进程里的其他二级窗口:通用铺贴,专用路径处理的类除外
+        XposedHelpers.findAndHookMethod(Activity.class, "onCreate", Bundle.class, new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                Activity activity = (Activity) param.thisObject;
+                if (isDedicatedActivity(activity)) {
+                    return;
+                }
+                KNOWN_ACTIVITIES.add(activity);
+                retryGenericInstall(activity, 0);
+            }
+        });
         log("Settings hook installed in " + lpparam.processName);
+    }
+
+    private static boolean isDedicatedActivity(Activity activity) {
+        ClassLoader classLoader = activity.getClass().getClassLoader();
+        try {
+            if (XposedHelpers.findClass(UNITY_ACTIVITY, classLoader).isInstance(activity)) {
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (XposedHelpers.findClass(QUICK_SETTINGS_ACTIVITY, classLoader).isInstance(activity)) {
+                return true;
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
     }
 
     private static void restoreSettingsSurface(View view) {
@@ -218,7 +248,33 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             } else if (attempt < 10) {
                 retrySettingsInstall(activity, attempt + 1);
             } else {
-                log("Settings wallpaper target unavailable");
+                // 部分二级页面没有 main_container,退化为通用容器铺贴
+                retryGenericInstall(activity, 0);
+            }
+        }, attempt == 0 ? 0L : 16L);
+    }
+
+    private static void retryGenericInstall(Activity activity, int attempt) {
+        activity.getWindow().getDecorView().postDelayed(() -> {
+            if (activity.isDestroyed() || activity.isFinishing()) {
+                return;
+            }
+            ViewGroup content = activity.findViewById(android.R.id.content);
+            ViewGroup root = null;
+            if (content != null && content.getChildCount() > 0
+                    && content.getChildAt(0) instanceof ViewGroup) {
+                root = (ViewGroup) content.getChildAt(0);
+            }
+            if (root != null && root.getWidth() > 0 && root.getHeight() > 0) {
+                SETTINGS_CONTAINER_BY_ACTIVITY.put(activity, root);
+                installSettingsLayoutListener(activity, root);
+                applySettingsPage(activity, root);
+                return;
+            }
+            if (attempt < 10) {
+                retryGenericInstall(activity, attempt + 1);
+            } else {
+                log("settings secondary window target unavailable: " + activity.getClass().getName());
             }
         }, attempt == 0 ? 0L : 16L);
     }
@@ -930,7 +986,9 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         float top = -values.translateY / values.scale;
         float right = (width - values.translateX) / values.scale;
         float bottom = (height - values.translateY) / values.scale;
-        return TextContrast.isLightArea(bitmap, left, top, right, bottom, 5);
+        // 壁纸带深色遮罩,判断阈值按遮罩后的实际亮度放大
+        float threshold = TextContrast.LIGHT_THRESHOLD / (1f - CenterCropDrawable.SCRIM_ALPHA);
+        return TextContrast.isLightArea(bitmap, left, top, right, bottom, 5, threshold);
     }
 
     private static boolean shouldStyleText(View view) {
@@ -1155,6 +1213,9 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             if (blurred != quarter) {
                 quarter.recycle();
             }
+            // 玻璃采样与带遮罩的壁纸保持一致
+            Canvas scrimCanvas = new Canvas(blurred);
+            scrimCanvas.drawColor(Math.round(255 * CenterCropDrawable.SCRIM_ALPHA) << 24);
             return blurred;
         } catch (Throwable throwable) {
             debugLog("blur thumbnail failed: " + throwable);

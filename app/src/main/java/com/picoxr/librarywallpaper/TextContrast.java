@@ -3,10 +3,18 @@ package com.picoxr.librarywallpaper;
 import android.graphics.Bitmap;
 
 final class TextContrast {
+    // 原始亮度阈值;壁纸带遮罩后按遮罩比例放大判断阈值
+    static final float LIGHT_THRESHOLD = 155f;
+
     private TextContrast() {
     }
 
     static boolean isLightRegion(Bitmap bitmap, float centerX, float centerY, int radius) {
+        return isLightRegion(bitmap, centerX, centerY, radius, LIGHT_THRESHOLD);
+    }
+
+    static boolean isLightRegion(Bitmap bitmap, float centerX, float centerY, int radius,
+            float threshold) {
         if (bitmap == null || bitmap.isRecycled() || bitmap.getWidth() == 0 || bitmap.getHeight() == 0) {
             return false;
         }
@@ -34,11 +42,16 @@ final class TextContrast {
                 count++;
             }
         }
-        return count > 0 && isLightLuminance(luminance / count);
+        return count > 0 && luminance / count >= threshold;
     }
 
     static boolean isLightArea(Bitmap bitmap, float left, float top, float right, float bottom,
             int grid) {
+        return isLightArea(bitmap, left, top, right, bottom, grid, LIGHT_THRESHOLD);
+    }
+
+    static boolean isLightArea(Bitmap bitmap, float left, float top, float right, float bottom,
+            int grid, float threshold) {
         if (bitmap == null || bitmap.isRecycled() || bitmap.getWidth() == 0 || bitmap.getHeight() == 0
                 || right <= left || bottom <= top || grid <= 0) {
             return false;
@@ -53,7 +66,7 @@ final class TextContrast {
                     continue;
                 }
                 count++;
-                if (isLightRegion(bitmap, x, y, 16)) {
+                if (isLightRegion(bitmap, x, y, 16, threshold)) {
                     votes++;
                 }
             }
@@ -62,6 +75,6 @@ final class TextContrast {
     }
 
     static boolean isLightLuminance(long luminance) {
-        return luminance >= 155;
+        return luminance >= LIGHT_THRESHOLD;
     }
 }
