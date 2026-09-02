@@ -70,8 +70,6 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             Collections.synchronizedMap(new WeakHashMap<>());
     private static final Map<TextView, Integer> TEXT_STYLE_SIGNATURE =
             Collections.synchronizedMap(new WeakHashMap<>());
-    private static final Map<TextView, Integer> TEXT_POSITION_SIGNATURE =
-            Collections.synchronizedMap(new WeakHashMap<>());
     // 进程级壁纸缓存与异步加载:位图解码和配置 binder 调用都不再占用主线程
     private static final Map<WallpaperTarget, Bitmap> WALLPAPER_CACHE =
             new ConcurrentHashMap<>();
@@ -537,15 +535,42 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         if (view.getVisibility() != View.VISIBLE) {
             return;
         }
+        Bitmap bitmap = cachedWallpaper(activity, target);
+        WallpaperConfig config = cachedConfig(activity, target);
+        if (bitmap == null || !config.enabled
+                || contentRoot.getWidth() <= 0 || contentRoot.getHeight() <= 0) {
+            return;
+        }
+        // 整页统一决策:同一界面的文字颜色深浅保持一致,不再逐个文字按局部亮度变化
+        boolean light = pageTextLight(bitmap, config, contentRoot);
+        styleTextTree(view, target, light);
+    }
+
+    private static void styleTextTree(View view, WallpaperTarget target, boolean light) {
+        if (view.getVisibility() != View.VISIBLE) {
+            return;
+        }
         if (view instanceof TextView && shouldStyleText(view)) {
-            styleTextView(activity, (TextView) view, contentRoot, target);
+            styleTextView((TextView) view, target, light);
         }
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
             for (int index = 0; index < group.getChildCount(); index++) {
-                styleTextTree(activity, group.getChildAt(index), contentRoot, target);
+                styleTextTree(group.getChildAt(index), target, light);
             }
         }
+    }
+
+    private static boolean pageTextLight(Bitmap bitmap, WallpaperConfig config, ViewGroup contentRoot) {
+        int width = contentRoot.getWidth();
+        int height = contentRoot.getHeight();
+        WallpaperTransform.RenderValues values = config.transform.render(
+                bitmap.getWidth(), bitmap.getHeight(), width, height);
+        float left = -values.translateX / values.scale;
+        float top = -values.translateY / values.scale;
+        float right = (width - values.translateX) / values.scale;
+        float bottom = (height - values.translateY) / values.scale;
+        return TextContrast.isLightArea(bitmap, left, top, right, bottom, 5);
     }
 
     private static boolean shouldStyleText(View view) {
@@ -556,34 +581,12 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         return !className.endsWith("SwitchView") && !className.endsWith("SwitchCompat");
     }
 
-    private static void styleTextView(Activity activity, TextView textView, ViewGroup contentRoot,
-            WallpaperTarget target) {
-        Bitmap bitmap = cachedWallpaper(activity, target);
-        WallpaperConfig config = cachedConfig(activity, target);
-        if (bitmap == null || !config.enabled || contentRoot.getWidth() <= 0 || contentRoot.getHeight() <= 0) {
-            return;
-        }
-        int[] rootLocation = new int[2];
-        int[] viewLocation = new int[2];
-        contentRoot.getLocationInWindow(rootLocation);
-        textView.getLocationInWindow(viewLocation);
-        float viewportX = viewLocation[0] - rootLocation[0];
-        float viewportY = viewLocation[1] - rootLocation[1];
-        WallpaperTransform.RenderValues values = config.transform.render(
-                bitmap.getWidth(), bitmap.getHeight(), contentRoot.getWidth(), contentRoot.getHeight());
-        float sourceX = (viewportX + textView.getWidth() / 2f - values.translateX) / values.scale;
-        float sourceY = (viewportY + textView.getHeight() / 2f - values.translateY) / values.scale;
-        // 先用位置签名去重,位置未变就不做像素采样,避免滚动/动画时反复 JNI 读像素
-        int positionSignature = (int) (sourceX / 24f) * 17
-                + (int) (sourceY / 24f) * 13 + target.ordinal();
-        Integer previousPosition = TEXT_POSITION_SIGNATURE.get(textView);
-        if (previousPosition != null && previousPosition == positionSignature) {
-            return;
-        }
-        boolean light = TextContrast.isLightRegion(bitmap, sourceX, sourceY, 12);
-        int signature = (light ? 1 : 0) * 31 + positionSignature;
+    private static void styleTextView(TextView textView, WallpaperTarget target, boolean light) {
+        int signature = (light ? 1 : 0) * 31 + target.ordinal();
         Integer previousSignature = TEXT_STYLE_SIGNATURE.get(textView);
-        TEXT_POSITION_SIGNATURE.put(textView, positionSignature);
+        if (previousSignature != null && previousSignature == signature) {
+            return;
+        }
         TEXT_STYLE_SIGNATURE.put(textView, signature);
         ColorStateList original = ORIGINAL_TEXT_COLORS.get(textView);
         if (original == null) {
@@ -749,9 +752,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 }
                 BITMAP_UNAVAILABLE_WARNED.remove(target);
                 WALLPAPER_CACHE.put(target, loaded);
-                // 新位图内容与旧的不同,文字对比度需要重新采样
+                // 新位图内容与旧的不同,文字对比度需要重新决策
                 TEXT_STYLE_SIGNATURE.clear();
-                TEXT_POSITION_SIGNATURE.clear();
                 MAIN_HANDLER.post(LibraryWallpaperHook::refreshKnownActivities);
             } catch (Throwable throwable) {
                 PENDING_BITMAP_LOADS.remove(target);

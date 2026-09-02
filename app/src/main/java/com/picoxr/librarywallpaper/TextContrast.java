@@ -37,6 +37,30 @@ final class TextContrast {
         return count > 0 && isLightLuminance(luminance / count);
     }
 
+    static boolean isLightArea(Bitmap bitmap, float left, float top, float right, float bottom,
+            int grid) {
+        if (bitmap == null || bitmap.isRecycled() || bitmap.getWidth() == 0 || bitmap.getHeight() == 0
+                || right <= left || bottom <= top || grid <= 0) {
+            return false;
+        }
+        int votes = 0;
+        int count = 0;
+        for (int row = 0; row < grid; row++) {
+            for (int col = 0; col < grid; col++) {
+                float x = left + (right - left) * (col + 0.5f) / grid;
+                float y = top + (bottom - top) * (row + 0.5f) / grid;
+                if (x < 0 || y < 0 || x >= bitmap.getWidth() || y >= bitmap.getHeight()) {
+                    continue;
+                }
+                count++;
+                if (isLightRegion(bitmap, x, y, 16)) {
+                    votes++;
+                }
+            }
+        }
+        return count > 0 && votes * 2 >= count;
+    }
+
     static boolean isLightLuminance(long luminance) {
         return luminance >= 155;
     }
