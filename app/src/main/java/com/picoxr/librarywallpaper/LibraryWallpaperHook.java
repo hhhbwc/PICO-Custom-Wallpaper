@@ -361,39 +361,39 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         applyQuestDeviceImages(activity, root);
     }
 
-    // 把快捷面板左侧的 PICO 设备插画换成 Quest 3 的正视渲染图(模块 assets 内嵌)
+    // 把快捷面板左侧的 PICO 设备插画换成 Quest 3 的正视渲染图(Base64 内嵌于 QuestImages)
     private static void applyQuestDeviceImages(Activity activity, ViewGroup root) {
         try {
-            replaceDeviceImage(activity, root, "quickSettings_iconHmd", "quest3_hmd.png");
+            replaceDeviceImage(activity, root, "quickSettings_iconHmd", QuestImages.hmd(null));
             replaceDeviceImage(activity, root, "quickSettings_iconControllerLeft",
-                    "quest3_controller_left.png");
+                    QuestImages.controller_left(null));
             replaceDeviceImage(activity, root, "quickSettings_iconControllerRight",
-                    "quest3_controller_right.png");
+                    QuestImages.controller_right(null));
         } catch (Throwable throwable) {
             debugLog("quest device images failed: " + throwable);
         }
     }
 
     private static void replaceDeviceImage(Activity activity, ViewGroup root, String idName,
-            String assetName) {
+            Bitmap bitmap) {
         int id = activity.getResources().getIdentifier(idName, "id", SETTINGS);
         if (id == 0) {
+            log("quest image: id not found " + idName);
             return;
         }
         View view = root.findViewById(id);
         if (!(view instanceof android.widget.ImageView)) {
+            log("quest image: view not ImageView " + idName);
+            return;
+        }
+        if (bitmap == null) {
+            log("quest image: bitmap null " + idName);
             return;
         }
         android.widget.ImageView imageView = (android.widget.ImageView) view;
-        try (InputStream stream = activity.getAssets().open(assetName)) {
-            android.graphics.drawable.Drawable drawable =
-                    android.graphics.drawable.Drawable.createFromStream(stream, assetName);
-            if (drawable != null && imageView.getDrawable() != drawable) {
-                imageView.setImageDrawable(drawable);
-            }
-        } catch (Throwable throwable) {
-            debugLog("replace " + idName + " failed: " + throwable);
-        }
+        imageView.setImageDrawable(new android.graphics.drawable.BitmapDrawable(
+                activity.getResources(), bitmap));
+        log("quest image applied: " + idName);
     }
 
     // 面板快捷格/滑条加毛玻璃:采样壁纸模糊图中按钮背后的区域,叠加高光让控件从壁纸上凸显
