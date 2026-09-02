@@ -36,6 +36,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     private static final boolean DEBUG_LOGGING = false;
     private static final String APP_MANAGER = "com.pvr.appmanager";
     private static final String SETTINGS = "com.picovr.settings";
+    private static final String QUICK_SETTINGS_ACTIVITY =
+            "com.picovr.quicksettings.QuickSettingsActivity";
     private static final String SIDE_NAVIGATION = "com.bytedance.osui.grouplist.OSUISideNavigation";
     private static final String[] SETTINGS_NAVIGATION_ITEMS = {
             "item_wifi", "item_controller", "item_bluetooth", "item_brightness", "item_lab",
@@ -88,6 +90,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     private static final Set<Activity> APP_MANAGER_ACTIVITIES =
             Collections.newSetFromMap(new WeakHashMap<>());
     private static final Map<Activity, ViewGroup> SETTINGS_CONTAINER_BY_ACTIVITY =
+            Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<Activity, ViewGroup> QUICK_CONTAINER_BY_ACTIVITY =
             Collections.synchronizedMap(new WeakHashMap<>());
     private static final ExecutorService BACKGROUND_EXECUTOR =
             Executors.newSingleThreadExecutor(runnable -> {
@@ -155,6 +159,20 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         XposedHelpers.findAndHookMethod(View.class, "setBackgroundColor", int.class, backgroundHook);
         XposedHelpers.findAndHookMethod(View.class, "setBackground", android.graphics.drawable.Drawable.class,
                 backgroundHook);
+        try {
+            Class<?> quickSettings = XposedHelpers.findClass(QUICK_SETTINGS_ACTIVITY, lpparam.classLoader);
+            XposedHelpers.findAndHookMethod(quickSettings, "onCreate", Bundle.class, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    Activity activity = (Activity) param.thisObject;
+                    KNOWN_ACTIVITIES.add(activity);
+                    retryQuickInstall(activity, 0);
+                }
+            });
+            log("Quick settings wallpaper hook installed in " + lpparam.processName);
+        } catch (Throwable throwable) {
+            debugLog("Quick settings activity unavailable: " + throwable);
+        }
         log("Settings hook installed in " + lpparam.processName);
     }
 
@@ -190,6 +208,54 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                 log("Settings wallpaper target unavailable");
             }
         }, attempt == 0 ? 0L : 16L);
+    }
+
+    private static void retryQuickInstall(Activity activity, int attempt) {
+        activity.getWindow().getDecorView().postDelayed(() -> {
+            if (activity.isDestroyed() || activity.isFinishing()) {
+                return;
+            }
+            ViewGroup content = activity.findViewById(android.R.id.content);
+            if (content != null && content.getChildCount() > 0
+                    && content.getChildAt(0) instanceof ViewGroup) {
+                ViewGroup root = (ViewGroup) content.getChildAt(0);
+                if (root.getWidth() > 0 && root.getHeight() > 0) {
+                    QUICK_CONTAINER_BY_ACTIVITY.put(activity, root);
+                    root.getViewTreeObserver().addOnGlobalLayoutListener(
+                            () -> requestQuickRefresh(activity, root));
+                    applyQuickPanel(activity, root);
+                    return;
+                }
+            }
+            if (attempt < 10) {
+                retryQuickInstall(activity, attempt + 1);
+            } else {
+                log("Quick settings wallpaper target unavailable");
+            }
+        }, attempt == 0 ? 0L : 16L);
+    }
+
+    private static void requestQuickRefresh(Activity activity, ViewGroup root) {
+        synchronized (SETTINGS_REFRESH_PENDING) {
+            if (!SETTINGS_REFRESH_PENDING.add(activity)) {
+                return;
+            }
+        }
+        root.postOnAnimation(() -> {
+            synchronized (SETTINGS_REFRESH_PENDING) {
+                SETTINGS_REFRESH_PENDING.remove(activity);
+            }
+            applyQuickPanel(activity, root);
+        });
+    }
+
+    private static void applyQuickPanel(Activity activity, ViewGroup root) {
+        if (!root.isAttachedToWindow() || root.getWidth() == 0 || root.getHeight() == 0) {
+            return;
+        }
+        // contentRoot 取面板自身:设置壁纸以面板窗口为视口铺满,文字对比度按面板区域统一决策
+        install(activity, root, WallpaperTarget.SETTINGS, root, true);
+        styleTextTree(activity, root, root, WallpaperTarget.SETTINGS);
     }
 
     private static void installSettings(Activity activity, ViewGroup container) {
@@ -357,9 +423,6 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
 
     private static void applyControlRow(Activity activity, View control, View row, ViewGroup contentRoot) {
         if (row.getWidth() > 0 && row.getHeight() > 0) {
-            if (row.getHeight() <= 140) {
-                clearControlBackgroundTree(row);
-            }
             clearControlBackgroundTree(row);
             debugLog("Settings control row made transparent for " + describe(control) + " -> " + describe(row));
         }
@@ -765,6 +828,11 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     private static void refreshKnownActivities() {
         for (Activity activity : KNOWN_ACTIVITIES.toArray(new Activity[0])) {
             try {
+                ViewGroup quickRoot = QUICK_CONTAINER_BY_ACTIVITY.get(activity);
+                if (quickRoot != null) {
+                    applyQuickPanel(activity, quickRoot);
+                    continue;
+                }
                 ViewGroup container = SETTINGS_CONTAINER_BY_ACTIVITY.get(activity);
                 if (container != null) {
                     applySettingsPage(activity, container);

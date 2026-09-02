@@ -25,6 +25,7 @@ final class WallpaperEditorView extends View {
     private Listener listener;
     private float lastX;
     private float lastY;
+    private int lastPointerCount;
 
     WallpaperEditorView(Context context) {
         super(context);
@@ -87,6 +88,8 @@ final class WallpaperEditorView extends View {
             return false;
         }
         scaleDetector.onTouchEvent(event);
+        boolean pinchEnded = lastPointerCount > 1 && event.getPointerCount() == 1;
+        lastPointerCount = event.getPointerCount();
         if (event.getPointerCount() > 1) {
             return true;
         }
@@ -96,6 +99,12 @@ final class WallpaperEditorView extends View {
                 lastY = event.getY();
                 return true;
             case MotionEvent.ACTION_MOVE:
+                if (pinchEnded) {
+                    // 双指结束后的第一个 MOVE 只重新锚定,避免残留位移导致画面跳变
+                    lastX = event.getX();
+                    lastY = event.getY();
+                    return true;
+                }
                 float dx = event.getX() - lastX;
                 float dy = event.getY() - lastY;
                 RectF frame = frame();
