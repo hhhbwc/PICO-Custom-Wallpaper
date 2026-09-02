@@ -12,6 +12,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.view.Choreographer;
 import android.view.View;
 import android.widget.TextView;
 import android.view.ViewGroup;
@@ -389,6 +390,7 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         }
         GLASS_SURFACES.put(view, new GlassSurface(card, blurred, transform, full.getWidth(),
                 full.getHeight(), radius));
+        startGlassFrameLoop();
         synchronized (APPLYING_SETTINGS_SURFACES) {
             if (APPLYING_SETTINGS_SURFACES.contains(view)) {
                 return;
@@ -415,6 +417,59 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                         glass.transform, glass.imageWidth, glass.imageHeight, glass.radius));
             } finally {
                 APPLYING_SETTINGS_SURFACES.remove(view);
+            }
+        }
+    }
+
+    // 硬件加速下滚动只回放子 View 的显示列表,不会调用 draw():逐帧比对玻璃按钮的
+    // 屏幕位置,变化才 invalidate,强制重录渲染指令,让玻璃区域实时跟随内容移动
+    private static volatile boolean glassFrameLoopRunning;
+
+    private static void startGlassFrameLoop() {
+        if (glassFrameLoopRunning) {
+            return;
+        }
+        glassFrameLoopRunning = true;
+        Choreographer.getInstance().postFrameCallback(new Choreographer.FrameCallback() {
+            @Override
+            public void doFrame(long frameTimeNanos) {
+                try {
+                    tickGlassViews();
+                } catch (Throwable throwable) {
+                    debugLog("glass frame tick failed: " + throwable);
+                }
+                if (!GLASS_SURFACES.isEmpty()) {
+                    Choreographer.getInstance().postFrameCallback(this);
+                } else {
+                    glassFrameLoopRunning = false;
+                }
+            }
+        });
+    }
+
+    private static void tickGlassViews() {
+        for (View view : GLASS_SURFACES.keySet().toArray(new View[0])) {
+            GlassSurface glass = GLASS_SURFACES.get(view);
+            if (glass == null || !view.isAttachedToWindow()
+                    || !(view.getBackground() instanceof GlassDrawable)) {
+                GLASS_SURFACES.remove(view);
+                continue;
+            }
+            view.getLocationInWindow(glass.viewViewport);
+            glass.cardRoot.getLocationInWindow(glass.cardViewport);
+            float relativeX = glass.viewViewport[0] - glass.cardViewport[0];
+            float relativeY = glass.viewViewport[1] - glass.cardViewport[1];
+            boolean moved = Float.isNaN(glass.lastX)
+                    || Math.abs(relativeX - glass.lastX) > 0.5f
+                    || Math.abs(relativeY - glass.lastY) > 0.5f;
+            boolean resized = glass.cardWidth != glass.cardRoot.getWidth()
+                    || glass.cardHeight != glass.cardRoot.getHeight();
+            if (moved || resized) {
+                glass.lastX = relativeX;
+                glass.lastY = relativeY;
+                glass.cardWidth = glass.cardRoot.getWidth();
+                glass.cardHeight = glass.cardRoot.getHeight();
+                view.invalidate();
             }
         }
     }
@@ -1120,6 +1175,12 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         final int imageWidth;
         final int imageHeight;
         final float radius;
+        final int[] viewViewport = new int[2];
+        final int[] cardViewport = new int[2];
+        float lastX = Float.NaN;
+        float lastY = Float.NaN;
+        int cardWidth;
+        int cardHeight;
 
         GlassSurface(ViewGroup cardRoot, Bitmap blurred, WallpaperTransform transform,
                 int imageWidth, int imageHeight, float radius) {
