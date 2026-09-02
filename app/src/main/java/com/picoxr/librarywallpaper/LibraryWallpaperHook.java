@@ -358,6 +358,42 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         install(activity, root, WallpaperTarget.SETTINGS, root, true);
         styleTextTree(activity, root, root, WallpaperTarget.SETTINGS);
         glassQuickPanelButtons(root);
+        applyQuestDeviceImages(activity, root);
+    }
+
+    // 把快捷面板左侧的 PICO 设备插画换成 Quest 3 的正视渲染图(模块 assets 内嵌)
+    private static void applyQuestDeviceImages(Activity activity, ViewGroup root) {
+        try {
+            replaceDeviceImage(activity, root, "quickSettings_iconHmd", "quest3_hmd.png");
+            replaceDeviceImage(activity, root, "quickSettings_iconControllerLeft",
+                    "quest3_controller_left.png");
+            replaceDeviceImage(activity, root, "quickSettings_iconControllerRight",
+                    "quest3_controller_right.png");
+        } catch (Throwable throwable) {
+            debugLog("quest device images failed: " + throwable);
+        }
+    }
+
+    private static void replaceDeviceImage(Activity activity, ViewGroup root, String idName,
+            String assetName) {
+        int id = activity.getResources().getIdentifier(idName, "id", SETTINGS);
+        if (id == 0) {
+            return;
+        }
+        View view = root.findViewById(id);
+        if (!(view instanceof android.widget.ImageView)) {
+            return;
+        }
+        android.widget.ImageView imageView = (android.widget.ImageView) view;
+        try (InputStream stream = activity.getAssets().open(assetName)) {
+            android.graphics.drawable.Drawable drawable =
+                    android.graphics.drawable.Drawable.createFromStream(stream, assetName);
+            if (drawable != null && imageView.getDrawable() != drawable) {
+                imageView.setImageDrawable(drawable);
+            }
+        } catch (Throwable throwable) {
+            debugLog("replace " + idName + " failed: " + throwable);
+        }
     }
 
     // 面板快捷格/滑条加毛玻璃:采样壁纸模糊图中按钮背后的区域,叠加高光让控件从壁纸上凸显
