@@ -383,6 +383,12 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
 
     private static void applyGlassSurface(View view, ViewGroup card, Bitmap blurred, Bitmap full,
             WallpaperTransform transform, float radius) {
+        // 记录被替换背景的固有尺寸与常态:固有尺寸保住 wrap_content 布局,常态用于识别默认药丸
+        Drawable replaced = view.getBackground();
+        int intrinsicWidth = replaced == null ? -1 : replaced.getIntrinsicWidth();
+        int intrinsicHeight = replaced == null ? -1 : replaced.getIntrinsicHeight();
+        android.graphics.drawable.Drawable.ConstantState defaultState =
+                replaced == null ? null : replaced.getConstantState();
         GlassSurface existing = GLASS_SURFACES.get(view);
         if (existing != null && existing.cardRoot == card) {
             Drawable background = view.getBackground();
@@ -392,7 +398,7 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             }
         }
         GLASS_SURFACES.put(view, new GlassSurface(card, blurred, transform, full.getWidth(),
-                full.getHeight(), radius));
+                full.getHeight(), radius, intrinsicWidth, intrinsicHeight, defaultState));
         startGlassFrameLoop();
         synchronized (APPLYING_SETTINGS_SURFACES) {
             if (APPLYING_SETTINGS_SURFACES.contains(view)) {
@@ -401,7 +407,8 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
             APPLYING_SETTINGS_SURFACES.add(view);
             try {
                 view.setBackground(new GlassDrawable(view, card, blurred, transform,
-                        full.getWidth(), full.getHeight(), radius));
+                        full.getWidth(), full.getHeight(), radius,
+                        intrinsicWidth, intrinsicHeight));
             } finally {
                 APPLYING_SETTINGS_SURFACES.remove(view);
             }
@@ -429,14 +436,34 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                     || glass.cardRoot.getWidth() == 0) {
                 return;
             }
+            // 系统在玻璃之后换上的背景是状态图案(如开启态高亮),叠加保留;默认药丸则不叠加
+            Drawable incoming = view.getBackground();
+            Drawable stateOverlay = null;
+            if (incoming != null && !sameConstantState(incoming, glass.defaultState)) {
+                stateOverlay = incoming;
+            }
             APPLYING_SETTINGS_SURFACES.add(view);
             try {
-                view.setBackground(new GlassDrawable(view, glass.cardRoot, glass.blurred,
-                        glass.transform, glass.imageWidth, glass.imageHeight, glass.radius));
+                GlassDrawable glassDrawable = new GlassDrawable(view, glass.cardRoot, glass.blurred,
+                        glass.transform, glass.imageWidth, glass.imageHeight, glass.radius,
+                        glass.intrinsicWidth, glass.intrinsicHeight);
+                if (stateOverlay != null) {
+                    glassDrawable.setStateOverlay(stateOverlay);
+                }
+                view.setBackground(glassDrawable);
             } finally {
                 APPLYING_SETTINGS_SURFACES.remove(view);
             }
         }
+    }
+
+    private static boolean sameConstantState(Drawable first,
+            android.graphics.drawable.Drawable.ConstantState second) {
+        if (first == null || second == null) {
+            return false;
+        }
+        android.graphics.drawable.Drawable.ConstantState firstState = first.getConstantState();
+        return firstState != null && firstState.equals(second);
     }
 
     // 硬件加速下滚动只回放子 View 的显示列表,不会调用 draw():逐帧比对玻璃按钮的
@@ -1195,6 +1222,9 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         final int imageWidth;
         final int imageHeight;
         final float radius;
+        final int intrinsicWidth;
+        final int intrinsicHeight;
+        final android.graphics.drawable.Drawable.ConstantState defaultState;
         final int[] viewViewport = new int[2];
         final int[] cardViewport = new int[2];
         float lastX = Float.NaN;
@@ -1203,13 +1233,17 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
         int cardHeight;
 
         GlassSurface(ViewGroup cardRoot, Bitmap blurred, WallpaperTransform transform,
-                int imageWidth, int imageHeight, float radius) {
+                int imageWidth, int imageHeight, float radius, int intrinsicWidth,
+                int intrinsicHeight, android.graphics.drawable.Drawable.ConstantState defaultState) {
             this.cardRoot = cardRoot;
             this.blurred = blurred;
             this.transform = transform;
             this.imageWidth = imageWidth;
             this.imageHeight = imageHeight;
             this.radius = radius;
+            this.intrinsicWidth = intrinsicWidth;
+            this.intrinsicHeight = intrinsicHeight;
+            this.defaultState = defaultState;
         }
     }
 

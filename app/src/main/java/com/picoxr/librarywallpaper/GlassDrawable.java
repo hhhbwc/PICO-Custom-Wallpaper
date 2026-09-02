@@ -28,6 +28,11 @@ final class GlassDrawable extends Drawable {
     private final float radius;
     // 采样量化步长:模糊图里 1 像素对应的卡片位移,步长内的移动不影响观感但免去重录显示列表
     private final float quantum;
+    // 被替换背景的固有尺寸,保持 wrap_content 布局不缩水;-1 表示无
+    private final int intrinsicWidth;
+    private final int intrinsicHeight;
+    // 系统在玻璃之后设置的状态图案(如开启态高亮药丸),叠加绘制在模糊层上
+    private Drawable stateOverlay;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint overlay = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
@@ -37,7 +42,7 @@ final class GlassDrawable extends Drawable {
     private final int[] cardLocation = new int[2];
 
     GlassDrawable(View view, ViewGroup cardRoot, Bitmap blurred, WallpaperTransform transform,
-            int imageWidth, int imageHeight, float radius) {
+            int imageWidth, int imageHeight, float radius, int intrinsicWidth, int intrinsicHeight) {
         this.view = view;
         this.cardRoot = cardRoot;
         this.blurred = blurred;
@@ -45,13 +50,30 @@ final class GlassDrawable extends Drawable {
         this.imageWidth = imageWidth;
         this.imageHeight = imageHeight;
         this.radius = radius;
+        this.intrinsicWidth = intrinsicWidth;
+        this.intrinsicHeight = intrinsicHeight;
         this.quantum = blurred == null || blurred.getWidth() == 0 ? 16f
                 : Math.max(12f, Math.min(128f,
                 transform.scale * imageWidth / blurred.getWidth()));
     }
 
+    void setStateOverlay(Drawable drawable) {
+        stateOverlay = drawable;
+        invalidateSelf();
+    }
+
     float samplingQuantum() {
         return quantum;
+    }
+
+    @Override
+    public int getIntrinsicWidth() {
+        return intrinsicWidth;
+    }
+
+    @Override
+    public int getIntrinsicHeight() {
+        return intrinsicHeight;
     }
 
     boolean matches(Bitmap otherBlurred, WallpaperTransform other) {
@@ -96,6 +118,12 @@ final class GlassDrawable extends Drawable {
         overlay.setStyle(Paint.Style.FILL);
         overlay.setColor(hasState(state, android.R.attr.state_pressed) ? TINT_PRESSED : TINT);
         canvas.drawRoundRect(rect, radius, radius, overlay);
+        if (stateOverlay != null) {
+            // 系统切换的状态图案(开启态等)叠加在模糊层上,保留原生开启反馈
+            stateOverlay.setBounds(bounds);
+            stateOverlay.setState(state);
+            stateOverlay.draw(canvas);
+        }
         overlay.setStyle(Paint.Style.STROKE);
         overlay.setStrokeWidth(Math.max(1f, radius * 0.05f));
         overlay.setColor(hasState(state, android.R.attr.state_focused)
