@@ -380,32 +380,23 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
     private static void applyGlassSurface(View view, ViewGroup card, Bitmap blurred, Bitmap full,
             WallpaperTransform transform, float radius) {
         GlassSurface existing = GLASS_SURFACES.get(view);
-        int[] cardLocation = new int[2];
-        int[] viewLocation = new int[2];
-        card.getLocationInWindow(cardLocation);
-        view.getLocationInWindow(viewLocation);
-        float viewportX = viewLocation[0] - cardLocation[0];
-        float viewportY = viewLocation[1] - cardLocation[1];
         if (existing != null && existing.cardRoot == card) {
             Drawable background = view.getBackground();
             if (background instanceof GlassDrawable
-                    && ((GlassDrawable) background).matches(blurred, transform,
-                    card.getWidth(), card.getHeight(), viewportX, viewportY)) {
+                    && ((GlassDrawable) background).matches(blurred, transform)) {
                 return;
             }
         }
         GLASS_SURFACES.put(view, new GlassSurface(card, blurred, transform, full.getWidth(),
                 full.getHeight(), radius));
-        debugLog("glass on " + describe(view) + " viewport=" + (int) viewportX + "," + (int) viewportY);
         synchronized (APPLYING_SETTINGS_SURFACES) {
             if (APPLYING_SETTINGS_SURFACES.contains(view)) {
                 return;
             }
             APPLYING_SETTINGS_SURFACES.add(view);
             try {
-                view.setBackground(new GlassDrawable(blurred, transform, full.getWidth(),
-                        full.getHeight(), card.getWidth(), card.getHeight(),
-                        viewportX, viewportY, radius));
+                view.setBackground(new GlassDrawable(view, card, blurred, transform,
+                        full.getWidth(), full.getHeight(), radius));
             } finally {
                 APPLYING_SETTINGS_SURFACES.remove(view);
             }
@@ -418,16 +409,10 @@ public final class LibraryWallpaperHook implements IXposedHookLoadPackage {
                     || glass.cardRoot.getWidth() == 0) {
                 return;
             }
-            int[] cardLocation = new int[2];
-            int[] viewLocation = new int[2];
-            glass.cardRoot.getLocationInWindow(cardLocation);
-            view.getLocationInWindow(viewLocation);
             APPLYING_SETTINGS_SURFACES.add(view);
             try {
-                view.setBackground(new GlassDrawable(glass.blurred, glass.transform,
-                        glass.imageWidth, glass.imageHeight, glass.cardRoot.getWidth(),
-                        glass.cardRoot.getHeight(), viewLocation[0] - cardLocation[0],
-                        viewLocation[1] - cardLocation[1], glass.radius));
+                view.setBackground(new GlassDrawable(view, glass.cardRoot, glass.blurred,
+                        glass.transform, glass.imageWidth, glass.imageHeight, glass.radius));
             } finally {
                 APPLYING_SETTINGS_SURFACES.remove(view);
             }

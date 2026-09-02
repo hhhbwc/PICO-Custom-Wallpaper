@@ -9,56 +9,62 @@ import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
+import android.view.View;
+import android.view.ViewGroup;
 
-/** 按钮毛玻璃背景:采样壁纸模糊缩略图中按钮正后方的区域,叠加高光与状态描边。 */
+/** 按钮毛玻璃背景:每次绘制实时读取按钮在面板卡片内的位置,采样壁纸模糊缩略图对应区域,叠加高光与状态描边。 */
 final class GlassDrawable extends Drawable {
     private static final int TINT = 0x22FFFFFF;
     private static final int TINT_PRESSED = 0x3CFFFFFF;
     private static final int BORDER = 0x66FFFFFF;
     private static final int BORDER_FOCUSED = 0xFF5AA9FF;
 
+    private final View view;
+    private final ViewGroup cardRoot;
     private final Bitmap blurred;
     private final WallpaperTransform transform;
     private final int imageWidth;
     private final int imageHeight;
-    private final int cardWidth;
-    private final int cardHeight;
-    private final float viewportX;
-    private final float viewportY;
     private final float radius;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint overlay = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
     private final Path path = new Path();
     private final Rect src = new Rect();
+    private final int[] viewLocation = new int[2];
+    private final int[] cardLocation = new int[2];
 
-    GlassDrawable(Bitmap blurred, WallpaperTransform transform, int imageWidth, int imageHeight,
-            int cardWidth, int cardHeight, float viewportX, float viewportY, float radius) {
+    GlassDrawable(View view, ViewGroup cardRoot, Bitmap blurred, WallpaperTransform transform,
+            int imageWidth, int imageHeight, float radius) {
+        this.view = view;
+        this.cardRoot = cardRoot;
         this.blurred = blurred;
         this.transform = transform;
         this.imageWidth = imageWidth;
         this.imageHeight = imageHeight;
-        this.cardWidth = cardWidth;
-        this.cardHeight = cardHeight;
-        this.viewportX = viewportX;
-        this.viewportY = viewportY;
         this.radius = radius;
     }
 
-    boolean matches(Bitmap otherBlurred, WallpaperTransform other, int width, int height,
-            float x, float y) {
+    boolean matches(Bitmap otherBlurred, WallpaperTransform other) {
         return blurred == otherBlurred && transform.scale == other.scale
-                && transform.offsetX == other.offsetX && transform.offsetY == other.offsetY
-                && cardWidth == width && cardHeight == height
-                && viewportX == x && viewportY == y;
+                && transform.offsetX == other.offsetX && transform.offsetY == other.offsetY;
     }
 
     @Override
     public void draw(Canvas canvas) {
         Rect bounds = getBounds();
-        if (blurred == null || blurred.isRecycled() || bounds.isEmpty() || imageWidth <= 0) {
+        if (blurred == null || blurred.isRecycled() || bounds.isEmpty() || imageWidth <= 0
+                || !view.isAttachedToWindow() || cardRoot.getWidth() == 0
+                || cardRoot.getHeight() == 0) {
             return;
         }
+        // 实时读取位置:滚动/布局变化时玻璃区域逐帧跟随按钮背后的壁纸
+        view.getLocationInWindow(viewLocation);
+        cardRoot.getLocationInWindow(cardLocation);
+        float viewportX = viewLocation[0] - cardLocation[0];
+        float viewportY = viewLocation[1] - cardLocation[1];
+        int cardWidth = cardRoot.getWidth();
+        int cardHeight = cardRoot.getHeight();
         WallpaperTransform.RenderValues values = transform.render(imageWidth, imageHeight,
                 cardWidth, cardHeight);
         float ratio = (float) blurred.getWidth() / imageWidth;
