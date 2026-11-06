@@ -2,12 +2,23 @@ package com.picoxr.librarywallpaper;
 
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.Matrix;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 
+import com.picoxr.librarywallpaper.core.WorkspaceMetrics;
+
+/**
+ * Hosts the fixed 1280×720 logical editor canvas inside whatever window size the headset
+ * provides, scaling and centering it; touch events are mapped back through the inverse
+ * matrix so the workspace feels native at any resolution.
+ */
 final class LogicalWorkspaceLayout extends ViewGroup {
-    private WorkspaceMetrics metrics = WorkspaceMetrics.fit(
-            WallpaperState.EDITOR_WIDTH, WallpaperState.EDITOR_HEIGHT);
+    private static final int LOGICAL_WIDTH = 1280;
+    private static final int LOGICAL_HEIGHT = 720;
+
+    private WorkspaceMetrics metrics = WorkspaceMetrics.fit(LOGICAL_WIDTH, LOGICAL_HEIGHT);
 
     LogicalWorkspaceLayout(Context context) {
         super(context);
@@ -19,8 +30,8 @@ final class LogicalWorkspaceLayout extends ViewGroup {
         int width = MeasureSpec.getSize(widthMeasureSpec);
         int height = MeasureSpec.getSize(heightMeasureSpec);
         metrics = WorkspaceMetrics.fit(width, height);
-        int logicalWidth = MeasureSpec.makeMeasureSpec(WallpaperState.EDITOR_WIDTH, MeasureSpec.EXACTLY);
-        int logicalHeight = MeasureSpec.makeMeasureSpec(WallpaperState.EDITOR_HEIGHT, MeasureSpec.EXACTLY);
+        int logicalWidth = MeasureSpec.makeMeasureSpec(LOGICAL_WIDTH, MeasureSpec.EXACTLY);
+        int logicalHeight = MeasureSpec.makeMeasureSpec(LOGICAL_HEIGHT, MeasureSpec.EXACTLY);
         for (int index = 0; index < getChildCount(); index++) {
             getChildAt(index).measure(logicalWidth, logicalHeight);
         }
@@ -30,36 +41,32 @@ final class LogicalWorkspaceLayout extends ViewGroup {
     @Override
     protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
         for (int index = 0; index < getChildCount(); index++) {
-            getChildAt(index).layout(0, 0, WallpaperState.EDITOR_WIDTH, WallpaperState.EDITOR_HEIGHT);
+            getChildAt(index).layout(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
         }
     }
 
     @Override
     protected void dispatchDraw(Canvas canvas) {
         int save = canvas.save();
-        canvas.translate(metrics.left, metrics.top);
-        canvas.scale(metrics.scale, metrics.scale);
+        canvas.translate(metrics.getLeft(), metrics.getTop());
+        canvas.scale(metrics.getScale(), metrics.getScale());
         super.dispatchDraw(canvas);
         canvas.restoreToCount(save);
     }
 
     @Override
-    public boolean dispatchTouchEvent(android.view.MotionEvent event) {
-        android.view.MotionEvent logicalEvent = android.view.MotionEvent.obtain(event);
-        logicalEvent.offsetLocation(-metrics.left, -metrics.top);
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        MotionEvent logicalEvent = MotionEvent.obtain(event);
+        logicalEvent.offsetLocation(-metrics.getLeft(), -metrics.getTop());
         logicalEvent.transform(inverseMatrix());
         boolean handled = super.dispatchTouchEvent(logicalEvent);
         logicalEvent.recycle();
         return handled;
     }
 
-    private android.graphics.Matrix inverseMatrix() {
-        android.graphics.Matrix matrix = new android.graphics.Matrix();
-        matrix.setScale(1f / metrics.scale, 1f / metrics.scale);
+    private Matrix inverseMatrix() {
+        Matrix matrix = new Matrix();
+        matrix.setScale(1.0f / metrics.getScale(), 1.0f / metrics.getScale());
         return matrix;
-    }
-
-    WorkspaceMetrics metrics() {
-        return metrics;
     }
 }

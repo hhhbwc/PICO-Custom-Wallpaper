@@ -1,10 +1,9 @@
-package com.picoxr.librarywallpaper;
+package com.picoxr.librarywallpaper.draw;
 
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.ColorFilter;
 import android.graphics.Paint;
-import android.graphics.PixelFormat;
 import android.graphics.Path;
 import android.graphics.PorterDuff;
 import android.graphics.Rect;
@@ -13,12 +12,24 @@ import android.graphics.drawable.Drawable;
 import android.view.View;
 import android.view.ViewGroup;
 
-/** 按钮毛玻璃背景:实时采样壁纸模糊缩略图对应区域,渲染结果缓存为位图,绘制时零裁剪操作。 */
-final class GlassDrawable extends Drawable {
-    private static final int TINT = 0x22FFFFFF;
-    private static final int TINT_PRESSED = 0x3CFFFFFF;
+import com.picoxr.librarywallpaper.core.WallpaperTransform;
+
+/**
+ * "Frosted glass" background for quick-settings buttons: samples the blurred wallpaper
+ * under the button's current position inside the card, so the button appears to refract
+ * the wallpaper behind it.
+ *
+ * <p>The render is cached per (position-cell, state, size) triple and only re-rendered
+ * when the view moves at least one {@link #samplingQuantum} pixel — see the frame loop in
+ * {@code ViewApplier} that drives revalidation. Hover/press add a white wash and a
+ * border; focused/hovered switch the border to PICO's focus blue.</p>
+ */
+public final class GlassDrawable extends Drawable {
     private static final int BORDER = 0x30FFFFFF;
-    private static final int BORDER_FOCUSED = 0xFF5AA9FF;
+    private static final int BORDER_FOCUSED = 0xFF99AAFF;
+    private static final int TINT = 0x23FFFFFF;
+    private static final int TINT_PRESSED = 0x3DFFFFFF;
+
     private static final int STATE_PRESSED = 1;
     private static final int STATE_FOCUSED = 2;
     private static final int STATE_HOVERED = 4;
@@ -30,13 +41,9 @@ final class GlassDrawable extends Drawable {
     private final int imageWidth;
     private final int imageHeight;
     private final float radius;
-    // 采样量化步长:模糊图里 1 像素对应的卡片位移,步长内的移动不影响观感但免去重渲染
-    private final float quantum;
-    // 被替换背景的固有尺寸,保持 wrap_content 布局不缩水;-1 表示无
     private final int intrinsicWidth;
     private final int intrinsicHeight;
-    // 系统在玻璃之后设置的状态图案(如开启态高亮药丸),叠加绘制在模糊层上
-    private Drawable stateOverlay;
+    private final float quantum;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
     private final Paint overlay = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF rect = new RectF();
@@ -44,13 +51,16 @@ final class GlassDrawable extends Drawable {
     private final Rect src = new Rect();
     private final int[] viewLocation = new int[2];
     private final int[] cardLocation = new int[2];
+
     private Bitmap cache;
     private float cacheCellX = Float.NaN;
     private float cacheCellY = Float.NaN;
     private int cacheState = -1;
+    private Drawable stateOverlay;
 
-    GlassDrawable(View view, ViewGroup cardRoot, Bitmap blurred, WallpaperTransform transform,
-            int imageWidth, int imageHeight, float radius, int intrinsicWidth, int intrinsicHeight) {
+    public GlassDrawable(View view, ViewGroup cardRoot, Bitmap blurred, WallpaperTransform transform,
+                         int imageWidth, int imageHeight, float radius,
+                         int intrinsicWidth, int intrinsicHeight) {
         this.view = view;
         this.cardRoot = cardRoot;
         this.blurred = blurred;
@@ -60,45 +70,44 @@ final class GlassDrawable extends Drawable {
         this.radius = radius;
         this.intrinsicWidth = intrinsicWidth;
         this.intrinsicHeight = intrinsicHeight;
-        this.quantum = blurred == null || blurred.getWidth() == 0 ? 16f
-                : Math.max(12f, Math.min(128f,
-                transform.scale * imageWidth / blurred.getWidth()));
+        this.quantum = computeQuantum(blurred, transform, imageWidth);
     }
 
-    void setStateOverlay(Drawable drawable) {
-        stateOverlay = drawable;
-        cacheState = -1;
-        invalidateSelf();
+    private static float computeQuantum(Bitmap blurred, WallpaperTransform transform, int imageWidth) {
+        if (blurred == null || blurred.getWidth() == 0) {
+            return 16.0f;
+        }
+        float ratio = transform.getScale() * imageWidth / blurred.getWidth();
+        return Math.max(12.0f, Math.min(128.0f, ratio));
     }
 
-    float samplingQuantum() {
+    /** Position delta (px) that must accumulate before the cache is re-rendered. */
+    public float samplingQuantum() {
         return quantum;
     }
 
-    @Override
-    public int getIntrinsicWidth() {
-        return intrinsicWidth;
+    /** Replaces the drawable that shows pressed/hover states on top of the glass. */
+    public void setStateOverlay(Drawable overlay) {
+        this.stateOverlay = overlay;
+        this.cacheState = -1;
+        invalidateSelf();
     }
 
-    @Override
-    public int getIntrinsicHeight() {
-        return intrinsicHeight;
-    }
-
-    boolean matches(Bitmap otherBlurred, WallpaperTransform other) {
-        return blurred == otherBlurred && transform.scale == other.scale
-                && transform.offsetX == other.offsetX && transform.offsetY == other.offsetY;
+    public boolean matches(Bitmap otherBlurred, WallpaperTransform otherTransform) {
+        return blurred == otherBlurred
+                && transform.getScale() == otherTransform.getScale()
+                && transform.getOffsetX() == otherTransform.getOffsetX()
+                && transform.getOffsetY() == otherTransform.getOffsetY();
     }
 
     @Override
     public void draw(Canvas canvas) {
         Rect bounds = getBounds();
-        if (blurred == null || blurred.isRecycled() || bounds.isEmpty() || imageWidth <= 0
-                || !view.isAttachedToWindow() || cardRoot.getWidth() == 0
-                || cardRoot.getHeight() == 0) {
+        if (blurred == null || blurred.isRecycled() || bounds.isEmpty()
+                || imageWidth <= 0 || !view.isAttachedToWindow()
+                || cardRoot.getWidth() == 0 || cardRoot.getHeight() == 0) {
             return;
         }
-        // 实时读取位置,并量化到步长网格:同格内的重绘采样同一区域,模糊下无感
         view.getLocationInWindow(viewLocation);
         cardRoot.getLocationInWindow(cardLocation);
         float cellX = Math.round((viewLocation[0] - cardLocation[0]) / quantum) * quantum;
@@ -106,61 +115,56 @@ final class GlassDrawable extends Drawable {
         int cardWidth = cardRoot.getWidth();
         int cardHeight = cardRoot.getHeight();
         int state = stateSignature();
-        if (cache == null || cache.getWidth() != bounds.width()
-                || cache.getHeight() != bounds.height()
+        if (cache == null || cache.getWidth() != bounds.width() || cache.getHeight() != bounds.height()
                 || cellX != cacheCellX || cellY != cacheCellY || state != cacheState) {
             renderCache(bounds, cellX, cellY, cardWidth, cardHeight, state);
             cacheCellX = cellX;
             cacheCellY = cellY;
             cacheState = state;
         }
-        canvas.drawBitmap(cache, 0f, 0f, paint);
+        canvas.drawBitmap(cache, 0.0f, 0.0f, paint);
     }
 
-    private void renderCache(Rect bounds, float cellX, float cellY, int cardWidth, int cardHeight,
-            int state) {
-        if (cache == null || cache.getWidth() != bounds.width()
-                || cache.getHeight() != bounds.height()) {
-            cache = Bitmap.createBitmap(Math.max(1, bounds.width()),
-                    Math.max(1, bounds.height()), Bitmap.Config.ARGB_8888);
+    private void renderCache(Rect bounds, float cellX, float cellY, int cardWidth, int cardHeight, int state) {
+        if (cache == null || cache.getWidth() != bounds.width() || cache.getHeight() != bounds.height()) {
+            cache = Bitmap.createBitmap(Math.max(1, bounds.width()), Math.max(1, bounds.height()),
+                    Bitmap.Config.ARGB_8888);
         }
         Canvas cacheCanvas = new Canvas(cache);
         cacheCanvas.drawColor(0, PorterDuff.Mode.CLEAR);
-        WallpaperTransform.RenderValues values = transform.render(imageWidth, imageHeight,
-                cardWidth, cardHeight);
+
+        WallpaperTransform.RenderValues values = transform.render(imageWidth, imageHeight, cardWidth, cardHeight);
         float ratio = (float) blurred.getWidth() / imageWidth;
+
         rect.set(bounds);
         path.reset();
         path.addRoundRect(rect, radius, radius, Path.Direction.CW);
         cacheCanvas.save();
         cacheCanvas.clipPath(path);
-        int left = clamp((cellX - values.translateX) / values.scale * ratio,
-                0, blurred.getWidth());
-        int top = clamp((cellY - values.translateY) / values.scale * ratio,
-                0, blurred.getHeight());
-        int right = clamp((cellX + bounds.width() - values.translateX) / values.scale * ratio,
-                0, blurred.getWidth());
-        int bottom = clamp((cellY + bounds.height() - values.translateY) / values.scale * ratio,
-                0, blurred.getHeight());
+
+        int left = clamp(((cellX - values.translateX) / values.scale) * ratio, 0, blurred.getWidth());
+        int top = clamp(((cellY - values.translateY) / values.scale) * ratio, 0, blurred.getHeight());
+        int right = clamp(((cellX + bounds.width() - values.translateX) / values.scale) * ratio, 0, blurred.getWidth());
+        int bottom = clamp(((cellY + bounds.height() - values.translateY) / values.scale) * ratio, 0, blurred.getHeight());
         src.set(left, top, Math.max(left + 1, right), Math.max(top + 1, bottom));
         cacheCanvas.drawBitmap(blurred, src, rect, paint);
+
         overlay.setStyle(Paint.Style.FILL);
         overlay.setColor((state & STATE_PRESSED) != 0 ? TINT_PRESSED : TINT);
         cacheCanvas.drawRoundRect(rect, radius, radius, overlay);
+
         if (stateOverlay != null) {
-            // 系统切换的状态图案(开启态等)叠加在模糊层上,保留原生开启反馈
             stateOverlay.setBounds(bounds);
             stateOverlay.setState(getState());
             stateOverlay.draw(cacheCanvas);
         }
+
         overlay.setStyle(Paint.Style.STROKE);
-        overlay.setStrokeWidth(Math.max(1f, radius * 0.05f));
-        overlay.setColor((state & (STATE_FOCUSED | STATE_HOVERED)) != 0
-                ? BORDER_FOCUSED : BORDER);
-        float inset = overlay.getStrokeWidth() / 2f;
+        overlay.setStrokeWidth(Math.max(1.0f, radius * 0.05f));
+        overlay.setColor((state & (STATE_FOCUSED | STATE_HOVERED)) != 0 ? BORDER_FOCUSED : BORDER);
+        float inset = overlay.getStrokeWidth() / 2.0f;
         rect.inset(inset, inset);
-        cacheCanvas.drawRoundRect(rect, Math.max(0f, radius - inset),
-                Math.max(0f, radius - inset), overlay);
+        cacheCanvas.drawRoundRect(rect, Math.max(0.0f, radius - inset), Math.max(0.0f, radius - inset), overlay);
         cacheCanvas.restore();
     }
 
@@ -184,6 +188,9 @@ final class GlassDrawable extends Drawable {
     }
 
     private static boolean hasState(int[] state, int attr) {
+        if (state == null) {
+            return false;
+        }
         for (int item : state) {
             if (item == attr) {
                 return true;
@@ -204,6 +211,16 @@ final class GlassDrawable extends Drawable {
     }
 
     @Override
+    public int getIntrinsicWidth() {
+        return intrinsicWidth;
+    }
+
+    @Override
+    public int getIntrinsicHeight() {
+        return intrinsicHeight;
+    }
+
+    @Override
     public void setAlpha(int alpha) {
     }
 
@@ -212,7 +229,8 @@ final class GlassDrawable extends Drawable {
     }
 
     @Override
+    @Deprecated
     public int getOpacity() {
-        return PixelFormat.TRANSLUCENT;
+        return android.graphics.PixelFormat.TRANSLUCENT;
     }
 }

@@ -10,15 +10,24 @@ import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.View;
 
+import com.picoxr.librarywallpaper.core.WallpaperTarget;
+import com.picoxr.librarywallpaper.core.WallpaperTransform;
+
+/**
+ * Drag-to-position, pinch-to-zoom crop editor. Draws the image with the target's preview
+ * aspect ratio as a bright frame; the area outside the frame is dimmed (mirroring how
+ * the wallpaper will be cropped in the real window).
+ */
 final class WallpaperEditorView extends View {
     interface Listener {
         void onTransformChanged(WallpaperTransform transform);
     }
 
-    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
     private final Paint framePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint dimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final ScaleGestureDetector scaleDetector;
+
     private Bitmap bitmap;
     private WallpaperTarget target = WallpaperTarget.LIBRARY;
     private WallpaperTransform transform = WallpaperTransform.centered();
@@ -29,20 +38,20 @@ final class WallpaperEditorView extends View {
 
     WallpaperEditorView(Context context) {
         super(context);
-        setBackgroundColor(Color.rgb(19, 23, 28));
         framePaint.setStyle(Paint.Style.STROKE);
-        framePaint.setStrokeWidth(2f);
+        framePaint.setStrokeWidth(2.0f);
         framePaint.setColor(Color.rgb(104, 181, 255));
         dimPaint.setColor(Color.argb(140, 0, 0, 0));
-        scaleDetector = new ScaleGestureDetector(context, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
-            @Override
-            public boolean onScale(ScaleGestureDetector detector) {
-                transform = transform.scaled(detector.getScaleFactor());
-                notifyChanged();
-                invalidate();
-                return true;
-            }
-        });
+        scaleDetector = new ScaleGestureDetector(context,
+                new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                    @Override
+                    public boolean onScale(ScaleGestureDetector detector) {
+                        transform = transform.scaled(detector.getScaleFactor());
+                        notifyChanged();
+                        invalidate();
+                        return true;
+                    }
+                });
     }
 
     void setBitmap(Bitmap bitmap) {
@@ -73,11 +82,11 @@ final class WallpaperEditorView extends View {
         canvas.save();
         canvas.translate(frame.left + values.translateX, frame.top + values.translateY);
         canvas.scale(values.scale, values.scale);
-        canvas.drawBitmap(bitmap, 0f, 0f, paint);
+        canvas.drawBitmap(bitmap, 0.0f, 0.0f, paint);
         canvas.restore();
-        canvas.drawRect(0f, 0f, getWidth(), frame.top, dimPaint);
-        canvas.drawRect(0f, frame.bottom, getWidth(), getHeight(), dimPaint);
-        canvas.drawRect(0f, frame.top, frame.left, frame.bottom, dimPaint);
+        canvas.drawRect(0.0f, 0.0f, getWidth(), frame.top, dimPaint);
+        canvas.drawRect(0.0f, frame.bottom, getWidth(), getHeight(), dimPaint);
+        canvas.drawRect(0.0f, frame.top, frame.left, frame.bottom, dimPaint);
         canvas.drawRect(frame.right, frame.top, getWidth(), frame.bottom, dimPaint);
         canvas.drawRect(frame, framePaint);
     }
@@ -100,15 +109,13 @@ final class WallpaperEditorView extends View {
                 return true;
             case MotionEvent.ACTION_MOVE:
                 if (pinchEnded) {
-                    // 双指结束后的第一个 MOVE 只重新锚定,避免残留位移导致画面跳变
                     lastX = event.getX();
                     lastY = event.getY();
                     return true;
                 }
-                float dx = event.getX() - lastX;
-                float dy = event.getY() - lastY;
                 RectF frame = frame();
-                transform = transform.moved(dx, dy, bitmap.getWidth(), bitmap.getHeight(),
+                transform = transform.moved(event.getX() - lastX, event.getY() - lastY,
+                        bitmap.getWidth(), bitmap.getHeight(),
                         Math.round(frame.width()), Math.round(frame.height()));
                 lastX = event.getX();
                 lastY = event.getY();
@@ -120,14 +127,15 @@ final class WallpaperEditorView extends View {
         }
     }
 
+    /** Largest frame with the target's aspect ratio inside the padded view. */
     private RectF frame() {
         float width = getWidth() - getPaddingLeft() - getPaddingRight();
         float height = getHeight() - getPaddingTop() - getPaddingBottom();
-        float ratio = (float) target.previewWidth / target.previewHeight;
+        float ratio = (float) target.getPreviewWidth() / target.getPreviewHeight();
         float frameWidth = Math.min(width, height * ratio);
         float frameHeight = frameWidth / ratio;
-        float left = getPaddingLeft() + (width - frameWidth) / 2f;
-        float top = getPaddingTop() + (height - frameHeight) / 2f;
+        float left = getPaddingLeft() + (width - frameWidth) / 2.0f;
+        float top = getPaddingTop() + (height - frameHeight) / 2.0f;
         return new RectF(left, top, left + frameWidth, top + frameHeight);
     }
 
